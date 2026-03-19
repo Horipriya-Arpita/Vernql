@@ -1,0 +1,186 @@
+<?php
+/**
+ * TextSQL API Integration - PHP Example
+ * Demonstrates how to integrate TextSQL API into a PHP application
+ */
+
+// TextSQL API Configuration
+define('TEXTSQL_API_KEY', '{{ api_key }}');
+define('TEXTSQL_BASE_URL', '{{ base_url }}');
+define('SCHEMA_ID', '{{ schema_id }}');
+
+/**
+ * Generate SQL from natural language using TextSQL API
+ *
+ * @param string $naturalLanguageQuery Natural language question
+ * @return array|null Response containing generated SQL and metadata, or null on error
+ */
+function generateSQL($naturalLanguageQuery) {
+    $url = TEXTSQL_BASE_URL . '/{{ api_version }}/queries';
+
+    $headers = [
+        'X-API-Key: ' . TEXTSQL_API_KEY,
+        'Content-Type: application/json'
+    ];
+
+    $payload = json_encode([
+        'schema_id' => SCHEMA_ID,
+        'query' => $naturalLanguageQuery
+    ]);
+
+    // Initialize cURL
+    $ch = curl_init($url);
+
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+
+    // Execute request
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $error = curl_error($ch);
+
+    curl_close($ch);
+
+    // Handle errors
+    if ($error) {
+        error_log("TextSQL API request failed: $error");
+        return null;
+    }
+
+    if ($httpCode >= 400) {
+        error_log("TextSQL API returned error: HTTP $httpCode");
+        return null;
+    }
+
+    // Parse and return response
+    return json_decode($response, true);
+}
+
+/**
+ * Handle query endpoint
+ * POST /query
+ *
+ * Example request:
+ * POST /query.php
+ * Content-Type: application/json
+ * {
+ *     "question": "{{ query_example }}"
+ * }
+ */
+function handleQueryRequest() {
+    // Set response header
+    header('Content-Type: application/json');
+
+    // Only allow POST requests
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        http_response_code(405);
+        echo json_encode([
+            'success' => false,
+            'error' => 'Method not allowed. Use POST.'
+        ]);
+        return;
+    }
+
+    // Parse request body
+    $input = file_get_contents('php://input');
+    $data = json_decode($input, true);
+
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        http_response_code(400);
+        echo json_encode([
+            'success' => false,
+            'error' => 'Invalid JSON in request body'
+        ]);
+        return;
+    }
+
+    // Validate question parameter
+    if (!isset($data['question']) || empty($data['question'])) {
+        http_response_code(400);
+        echo json_encode([
+            'success' => false,
+            'error' => "Missing 'question' in request body"
+        ]);
+        return;
+    }
+
+    $question = $data['question'];
+
+    // Generate SQL using TextSQL API
+    $result = generateSQL($question);
+
+    if ($result) {
+        echo json_encode([
+            'success' => true,
+            'sql' => $result['generated_sql'] ?? null,
+            'confidence' => $result['confidence_score'] ?? 0.0,
+            'warnings' => $result['warnings'] ?? []
+        ]);
+    } else {
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'error' => 'Failed to generate SQL'
+        ]);
+    }
+}
+
+/**
+ * Health check endpoint
+ */
+function handleHealthCheck() {
+    header('Content-Type: application/json');
+    echo json_encode(['status' => 'healthy']);
+}
+
+// Route handling
+$requestUri = $_SERVER['REQUEST_URI'];
+$requestPath = parse_url($requestUri, PHP_URL_PATH);
+
+switch ($requestPath) {
+    case '/query':
+    case '/query.php':
+        handleQueryRequest();
+        break;
+
+    case '/health':
+    case '/health.php':
+        handleHealthCheck();
+        break;
+
+    default:
+        // Default route - API information
+        header('Content-Type: application/json');
+        echo json_encode([
+            'service' => 'TextSQL Integration API',
+            'endpoints' => [
+                'query' => 'POST /query',
+                'health' => 'GET /health'
+            ]
+        ]);
+        break;
+}
+
+// Example usage (uncomment to test)
+/*
+echo "TextSQL PHP Integration Example\n";
+echo str_repeat('-', 50) . "\n";
+
+$testQuery = '{{ query_example }}';
+$result = generateSQL($testQuery);
+
+if ($result) {
+    echo "Question: $testQuery\n";
+    echo "Generated SQL: " . ($result['generated_sql'] ?? 'N/A') . "\n";
+    $confidence = ($result['confidence_score'] ?? 0) * 100;
+    echo "Confidence: " . number_format($confidence, 1) . "%\n";
+} else {
+    echo "Failed to generate SQL\n";
+}
+
+echo str_repeat('-', 50) . "\n";
+*/
+?>

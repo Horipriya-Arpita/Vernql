@@ -1,0 +1,130 @@
+"""
+TextSQL API Integration - FastAPI Example
+Demonstrates how to integrate TextSQL API into a FastAPI application
+"""
+import requests
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+from typing import List, Optional
+
+app = FastAPI(title="TextSQL Integration API")
+
+# TextSQL API Configuration
+TEXTSQL_API_KEY = "{{ api_key }}"
+TEXTSQL_BASE_URL = "{{ base_url }}"
+SCHEMA_ID = "{{ schema_id }}"
+
+
+class QueryRequest(BaseModel):
+    """Request model for SQL generation"""
+    question: str = Field(..., description="Natural language question", min_length=1)
+
+
+class QueryResponse(BaseModel):
+    """Response model for SQL generation"""
+    success: bool
+    sql: Optional[str] = None
+    confidence: Optional[float] = None
+    warnings: List[str] = []
+    error: Optional[str] = None
+
+
+async def generate_sql(natural_language_query: str) -> dict:
+    """
+    Generate SQL from natural language using TextSQL API
+
+    Args:
+        natural_language_query: Natural language question
+
+    Returns:
+        dict: Response containing generated SQL and metadata
+
+    Raises:
+        HTTPException: If API request fails
+    """
+    url = f"{TEXTSQL_BASE_URL}/{{ api_version }}/queries"
+
+    headers = {
+        "X-API-Key": TEXTSQL_API_KEY,
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "schema_id": SCHEMA_ID,
+        "query": natural_language_query
+    }
+
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        response.raise_for_status()
+        return response.json()
+
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail="TextSQL API request timed out")
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"TextSQL API error: {str(e)}")
+
+
+@app.post("/query", response_model=QueryResponse)
+async def query_endpoint(request: QueryRequest):
+    """
+    Convert natural language to SQL
+
+    Example request:
+    ```json
+    {
+        "question": "{{ query_example }}"
+    }
+    ```
+
+    Returns:
+        QueryResponse: Generated SQL with confidence score
+    """
+    try:
+        result = await generate_sql(request.question)
+
+        return QueryResponse(
+            success=True,
+            sql=result.get("generated_sql"),
+            confidence=result.get("confidence_score"),
+            warnings=result.get("warnings", [])
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        return QueryResponse(
+            success=False,
+            error=str(e)
+        )
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint"""
+    return {"status": "healthy", "service": "textsql-integration"}
+
+
+@app.get("/")
+async def root():
+    """Root endpoint with API information"""
+    return {
+        "service": "TextSQL Integration API",
+        "endpoints": {
+            "query": "POST /query",
+            "health": "GET /health",
+            "docs": "GET /docs"
+        }
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    print("TextSQL FastAPI Integration Example")
+    print("-" * 50)
+    print("Starting FastAPI server on http://localhost:8000")
+    print("API docs available at http://localhost:8000/docs")
+    print("-" * 50)
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)

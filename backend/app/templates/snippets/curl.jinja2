@@ -1,0 +1,127 @@
+#!/bin/bash
+# TextSQL API Integration - cURL Examples
+# Use these commands to test the TextSQL API from the command line
+
+# Configuration
+API_KEY="{{ api_key }}"
+BASE_URL="{{ base_url }}"
+SCHEMA_ID="{{ schema_id }}"
+
+echo "TextSQL API - cURL Examples"
+echo "=================================="
+echo ""
+
+# 1. Upload a database schema
+echo "1. Upload Database Schema"
+echo "-------------------------"
+cat << 'EOF'
+curl -X POST "${BASE_URL}/v1/schemas" \
+  -H "X-API-Key: ${API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My Database",
+    "connection_string": "postgresql://user:password@localhost:5432/mydb",
+    "include_sample_data": true
+  }'
+EOF
+echo ""
+echo ""
+
+# 2. List all schemas
+echo "2. List All Schemas"
+echo "-------------------"
+echo "curl -X GET \"${BASE_URL}/v1/schemas\" \\"
+echo "  -H \"X-API-Key: ${API_KEY}\""
+echo ""
+echo ""
+
+# 3. Get schema details
+echo "3. Get Schema Details"
+echo "---------------------"
+echo "curl -X GET \"${BASE_URL}/v1/schemas/${SCHEMA_ID}\" \\"
+echo "  -H \"X-API-Key: ${API_KEY}\""
+echo ""
+echo ""
+
+# 4. Enrich schema with AI descriptions
+echo "4. Enrich Schema with AI"
+echo "------------------------"
+echo "curl -X POST \"${BASE_URL}/v1/schemas/${SCHEMA_ID}/enrich\" \\"
+echo "  -H \"X-API-Key: ${API_KEY}\""
+echo ""
+echo ""
+
+# 5. Generate SQL from natural language
+echo "5. Generate SQL from Natural Language"
+echo "--------------------------------------"
+cat << EOF
+curl -X POST "${BASE_URL}/v1/queries" \\
+  -H "X-API-Key: ${API_KEY}" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "schema_id": "${SCHEMA_ID}",
+    "query": "{{ query_example }}"
+  }'
+EOF
+echo ""
+echo ""
+
+# 6. Get query history
+echo "6. Get Query History"
+echo "--------------------"
+echo "curl -X GET \"${BASE_URL}/v1/queries?limit=10\" \\"
+echo "  -H \"X-API-Key: ${API_KEY}\""
+echo ""
+echo ""
+
+# 7. Get specific query by ID
+echo "7. Get Specific Query"
+echo "---------------------"
+echo "QUERY_ID=\"your-query-id-here\""
+echo "curl -X GET \"${BASE_URL}/v1/queries/\${QUERY_ID}\" \\"
+echo "  -H \"X-API-Key: ${API_KEY}\""
+echo ""
+echo ""
+
+# 8. Submit feedback on a query
+echo "8. Submit Query Feedback"
+echo "------------------------"
+cat << 'EOF'
+QUERY_ID="your-query-id-here"
+curl -X POST "${BASE_URL}/v1/queries/${QUERY_ID}/feedback" \
+  -H "X-API-Key: ${API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "is_helpful": true,
+    "is_correct": true,
+    "feedback_notes": "Perfect query!"
+  }'
+EOF
+echo ""
+echo ""
+
+# 9. Health check
+echo "9. Health Check"
+echo "---------------"
+echo "curl -X GET \"${BASE_URL}/health\""
+echo ""
+echo ""
+
+# Quick test function
+echo "=================================="
+echo "Quick Test"
+echo "=================================="
+echo ""
+echo "Run this command to test SQL generation:"
+echo ""
+cat << EOF
+curl -X POST "${BASE_URL}/v1/queries" \\
+  -H "X-API-Key: ${API_KEY}" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "schema_id": "${SCHEMA_ID}",
+    "query": "{{ query_example }}"
+  }' | python -m json.tool
+EOF
+echo ""
+echo "Note: The '| python -m json.tool' part formats the JSON output (optional)"

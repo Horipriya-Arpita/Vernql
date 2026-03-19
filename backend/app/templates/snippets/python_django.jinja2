@@ -1,0 +1,151 @@
+"""
+TextSQL API Integration - Django Example
+Demonstrates how to integrate TextSQL API into a Django application
+
+Add this to your Django app's views.py
+"""
+import requests
+from django.http import JsonResponse
+from django.views.decorators.http import require_http_methods
+from django.views.decorators.csrf import csrf_exempt
+import json
+
+# TextSQL API Configuration
+# Add these to your Django settings.py:
+# TEXTSQL_API_KEY = "{{ api_key }}"
+# TEXTSQL_BASE_URL = "{{ base_url }}"
+# TEXTSQL_SCHEMA_ID = "{{ schema_id }}"
+
+from django.conf import settings
+
+TEXTSQL_API_KEY = getattr(settings, 'TEXTSQL_API_KEY', '{{ api_key }}')
+TEXTSQL_BASE_URL = getattr(settings, 'TEXTSQL_BASE_URL', '{{ base_url }}')
+SCHEMA_ID = getattr(settings, 'TEXTSQL_SCHEMA_ID', '{{ schema_id }}')
+
+
+def generate_sql(natural_language_query):
+    """
+    Generate SQL from natural language using TextSQL API
+
+    Args:
+        natural_language_query: Natural language question
+
+    Returns:
+        dict: Response containing generated SQL and metadata, or None on error
+    """
+    url = f"{TEXTSQL_BASE_URL}/{{ api_version }}/queries"
+
+    headers = {
+        "X-API-Key": TEXTSQL_API_KEY,
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "schema_id": SCHEMA_ID,
+        "query": natural_language_query
+    }
+
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        response.raise_for_status()
+        return response.json()
+
+    except requests.exceptions.RequestException as e:
+        print(f"TextSQL API request failed: {e}")
+        return None
+
+
+@csrf_exempt  # Remove in production - use proper CSRF handling
+@require_http_methods(["POST"])
+def query_view(request):
+    """
+    Django view to convert natural language to SQL
+
+    Example request:
+    POST /api/query/
+    Content-Type: application/json
+    {
+        "question": "{{ query_example }}"
+    }
+
+    Add to urls.py:
+    from .views import query_view
+    urlpatterns = [
+        path('api/query/', query_view, name='query'),
+    ]
+    """
+    try:
+        # Parse request body
+        data = json.loads(request.body)
+        question = data.get('question')
+
+        if not question:
+            return JsonResponse({
+                "success": False,
+                "error": "Missing 'question' in request"
+            }, status=400)
+
+        # Generate SQL using TextSQL API
+        result = generate_sql(question)
+
+        if result:
+            return JsonResponse({
+                "success": True,
+                "sql": result.get("generated_sql"),
+                "confidence": result.get("confidence_score"),
+                "warnings": result.get("warnings", [])
+            })
+        else:
+            return JsonResponse({
+                "success": False,
+                "error": "Failed to generate SQL"
+            }, status=500)
+
+    except json.JSONDecodeError:
+        return JsonResponse({
+            "success": False,
+            "error": "Invalid JSON in request body"
+        }, status=400)
+
+    except Exception as e:
+        return JsonResponse({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+
+def health_view(request):
+    """Health check endpoint"""
+    return JsonResponse({"status": "healthy"})
+
+
+# Example usage in Django management command or view
+def example_usage():
+    """
+    Example of how to use the TextSQL integration
+
+    Run this from Django shell:
+    >>> from yourapp.views import example_usage
+    >>> example_usage()
+    """
+    test_query = "{{ query_example }}"
+    result = generate_sql(test_query)
+
+    if result:
+        print(f"Question: {test_query}")
+        print(f"Generated SQL: {result.get('generated_sql')}")
+        print(f"Confidence: {result.get('confidence_score', 0):.2%}")
+    else:
+        print("Failed to generate SQL")
+
+
+# Add to your urls.py:
+"""
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path('api/query/', views.query_view, name='query'),
+    path('api/health/', views.health_view, name='health'),
+]
+"""

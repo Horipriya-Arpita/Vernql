@@ -1,0 +1,107 @@
+"""
+TextSQL API Integration - Flask Example
+Demonstrates how to integrate TextSQL API into a Flask application
+"""
+import requests
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+# TextSQL API Configuration
+TEXTSQL_API_KEY = "{{ api_key }}"
+TEXTSQL_BASE_URL = "{{ base_url }}"
+SCHEMA_ID = "{{ schema_id }}"
+
+
+def generate_sql(natural_language_query):
+    """
+    Generate SQL from natural language using TextSQL API
+
+    Args:
+        natural_language_query: Natural language question
+
+    Returns:
+        dict: Response containing generated SQL and metadata
+    """
+    url = f"{TEXTSQL_BASE_URL}/{{ api_version }}/queries"
+
+    headers = {
+        "X-API-Key": TEXTSQL_API_KEY,
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "schema_id": SCHEMA_ID,
+        "query": natural_language_query
+    }
+
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        response.raise_for_status()
+        return response.json()
+
+    except requests.exceptions.RequestException as e:
+        print(f"API request failed: {e}")
+        return None
+
+
+@app.route('/query', methods=['POST'])
+def query_endpoint():
+    """
+    Endpoint to convert natural language to SQL
+
+    Example request:
+    POST /query
+    {
+        "question": "{{ query_example }}"
+    }
+    """
+    data = request.get_json()
+
+    if not data or 'question' not in data:
+        return jsonify({"error": "Missing 'question' in request"}), 400
+
+    question = data['question']
+
+    # Generate SQL using TextSQL API
+    result = generate_sql(question)
+
+    if result:
+        return jsonify({
+            "success": True,
+            "sql": result.get("generated_sql"),
+            "confidence": result.get("confidence_score"),
+            "warnings": result.get("warnings", [])
+        })
+    else:
+        return jsonify({
+            "success": False,
+            "error": "Failed to generate SQL"
+        }), 500
+
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint"""
+    return jsonify({"status": "healthy"})
+
+
+if __name__ == '__main__':
+    # Example usage
+    print("TextSQL Flask Integration Example")
+    print("-" * 50)
+
+    # Test query
+    test_query = "{{ query_example }}"
+    result = generate_sql(test_query)
+
+    if result:
+        print(f"Question: {test_query}")
+        print(f"Generated SQL: {result.get('generated_sql')}")
+        print(f"Confidence: {result.get('confidence_score'):.2%}")
+
+    print("-" * 50)
+    print("Starting Flask server on http://localhost:5000")
+    print("Try: curl -X POST http://localhost:5000/query -H 'Content-Type: application/json' -d '{\"question\":\"Show all users\"}'")
+
+    app.run(debug=True, port=5000)

@@ -1,0 +1,88 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: textsql-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-textsql}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-textsql}
+      POSTGRES_DB: ${POSTGRES_DB:-textsql}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U textsql"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: textsql-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI Backend (optional - for development)
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: textsql-api
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-textsql}:${POSTGRES_PASSWORD:-textsql}@postgres:5432/${POSTGRES_DB:-textsql}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-CHANGE_THIS_IMMEDIATELY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DEBUG: ${DEBUG:-False}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    profiles:
+      - full  # Only start with --profile full
+
+  # Dashboard (Next.js) - optional
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: textsql-dashboard
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    volumes:
+      - ./dashboard:/app
+      - /app/node_modules
+    depends_on:
+      - api
+    profiles:
+      - full  # Only start with --profile full
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: textsql-network

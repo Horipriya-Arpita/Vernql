@@ -1,0 +1,156 @@
+/**
+ * TextSQL API Integration - Express.js Example
+ * Demonstrates how to integrate TextSQL API into an Express application
+ */
+const express = require('express');
+const axios = require('axios');
+
+const app = express();
+app.use(express.json());
+
+// TextSQL API Configuration
+const TEXTSQL_API_KEY = '{{ api_key }}';
+const TEXTSQL_BASE_URL = '{{ base_url }}';
+const SCHEMA_ID = '{{ schema_id }}';
+
+/**
+ * Generate SQL from natural language using TextSQL API
+ *
+ * @param {string} naturalLanguageQuery - Natural language question
+ * @returns {Promise<Object>} Response containing generated SQL and metadata
+ * @throws {Error} If API request fails
+ */
+async function generateSQL(naturalLanguageQuery) {
+    const url = `${TEXTSQL_BASE_URL}/{{ api_version }}/queries`;
+
+    const headers = {
+        'X-API-Key': TEXTSQL_API_KEY,
+        'Content-Type': 'application/json'
+    };
+
+    const payload = {
+        schema_id: SCHEMA_ID,
+        query: naturalLanguageQuery
+    };
+
+    try {
+        const response = await axios.post(url, payload, {
+            headers,
+            timeout: 30000
+        });
+        return response.data;
+    } catch (error) {
+        if (error.response) {
+            // API returned an error response
+            throw new Error(`TextSQL API error: ${error.response.status} - ${error.response.data.detail || error.response.statusText}`);
+        } else if (error.request) {
+            // No response received
+            throw new Error('TextSQL API request timeout or network error');
+        } else {
+            throw error;
+        }
+    }
+}
+
+/**
+ * POST /query - Convert natural language to SQL
+ *
+ * Example request:
+ * POST /query
+ * Content-Type: application/json
+ * {
+ *     "question": "{{ query_example }}"
+ * }
+ */
+app.post('/query', async (req, res) => {
+    try {
+        const { question } = req.body;
+
+        if (!question) {
+            return res.status(400).json({
+                success: false,
+                error: "Missing 'question' in request body"
+            });
+        }
+
+        // Generate SQL using TextSQL API
+        const result = await generateSQL(question);
+
+        res.json({
+            success: true,
+            sql: result.generated_sql,
+            confidence: result.confidence_score,
+            warnings: result.warnings || []
+        });
+
+    } catch (error) {
+        console.error('Query generation failed:', error.message);
+
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+/**
+ * GET /health - Health check endpoint
+ */
+app.get('/health', (req, res) => {
+    res.json({ status: 'healthy' });
+});
+
+/**
+ * GET / - Root endpoint with API information
+ */
+app.get('/', (req, res) => {
+    res.json({
+        service: 'TextSQL Integration API',
+        endpoints: {
+            query: 'POST /query',
+            health: 'GET /health'
+        },
+        example: {
+            url: '/query',
+            method: 'POST',
+            body: {
+                question: '{{ query_example }}'
+            }
+        }
+    });
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+    console.error('Unhandled error:', err);
+    res.status(500).json({
+        success: false,
+        error: 'Internal server error'
+    });
+});
+
+// Start server
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+    console.log('TextSQL Express Integration Example');
+    console.log('-'.repeat(50));
+    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Try: curl -X POST http://localhost:${PORT}/query -H "Content-Type: application/json" -d '{"question":"Show all users"}'`);
+    console.log('-'.repeat(50));
+
+    // Example usage
+    (async () => {
+        try {
+            const testQuery = '{{ query_example }}';
+            const result = await generateSQL(testQuery);
+            console.log(`\nExample Query: ${testQuery}`);
+            console.log(`Generated SQL: ${result.generated_sql}`);
+            console.log(`Confidence: ${(result.confidence_score * 100).toFixed(1)}%`);
+        } catch (error) {
+            console.error('Example failed:', error.message);
+        }
+    })();
+});
+
+module.exports = app;
