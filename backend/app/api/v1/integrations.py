@@ -6,7 +6,7 @@ from typing import Optional, Dict, List
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from app.core.dependencies import CurrentCompany
+from app.core.dependencies import CurrentCompany, CurrentCompanyEither
 from app.services.code_generator import CodeGenerator
 
 router = APIRouter(prefix="/integrations", tags=["Integrations"])
@@ -110,7 +110,7 @@ async def get_supported_languages():
 )
 async def generate_snippet(
     request: SnippetRequest,
-    company: CurrentCompany
+    company: CurrentCompanyEither
 ):
     """
     Generate integration code snippet for a specific language
@@ -180,7 +180,7 @@ async def generate_snippet(
     summary="Generate all code snippets"
 )
 async def generate_all_snippets(
-    company: CurrentCompany,
+    company: CurrentCompanyEither,
     base_url: Optional[str] = "http://localhost:8000",
     schema_id: Optional[str] = None
 ):
@@ -243,7 +243,7 @@ async def generate_all_snippets(
 )
 async def get_language_example(
     language: str,
-    company: CurrentCompany,
+    company: CurrentCompanyEither,
     base_url: Optional[str] = "http://localhost:8000"
 ):
     """

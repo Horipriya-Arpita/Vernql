@@ -1,17 +1,21 @@
 """
-Security utilities for API key generation and validation
+Security utilities for API key generation and validation, and password hashing
 """
 import hashlib
 import secrets
 from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.orm import Session
+from passlib.context import CryptContext
 import structlog
 
 from app.core.config import settings
 from app.models import APIKey, Company
 
 logger = structlog.get_logger()
+
+# Password hashing context
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def generate_api_key() -> str:
@@ -164,3 +168,40 @@ def create_api_key(
     )
 
     return raw_key, api_key_obj
+
+
+# ============================================================================
+# Password Utilities
+# ============================================================================
+
+def hash_password(password: str) -> str:
+    """
+    Hash a plain text password using bcrypt
+
+    Args:
+        password: Plain text password to hash
+
+    Returns:
+        str: Hashed password
+
+    Example:
+        hashed = hash_password("my_secure_password")
+    """
+    return pwd_context.hash(password)
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """
+    Verify a plain text password against a hashed password
+
+    Args:
+        plain_password: Plain text password to verify
+        hashed_password: Hashed password to compare against
+
+    Returns:
+        bool: True if password matches, False otherwise
+
+    Example:
+        is_valid = verify_password("user_input", stored_hash)
+    """
+    return pwd_context.verify(plain_password, hashed_password)

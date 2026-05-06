@@ -9,8 +9,9 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 
 from app.db.database import get_db
-from app.core.dependencies import CurrentCompany
+from app.core.dependencies import CurrentCompany, CurrentCompanyEither
 from app.services.sql_generator import SQLGenerator
+from app.services.session_service import SessionService
 from app.models import Query, QueryStatus
 
 router = APIRouter(prefix="/queries", tags=["Queries"])
@@ -21,6 +22,7 @@ class QueryRequest(BaseModel):
     """Request schema for generating SQL from natural language"""
     schema_id: UUID = Field(..., description="UUID of the schema to query against")
     query: str = Field(..., description="Natural language query", min_length=1, max_length=1000)
+    session_id: Optional[UUID] = Field(None, description="Optional session UUID to group queries into a conversation")
 
 
 class QueryResponse(BaseModel):
@@ -32,6 +34,8 @@ class QueryResponse(BaseModel):
     warnings: List[str] = []
     ai_provider: str
     ai_model: str
+    session_id: Optional[UUID] = None
+    turn_number: Optional[int] = None
     created_at: str
 
     class Config:
@@ -52,7 +56,7 @@ class QueryHistoryResponse(BaseModel):
 )
 async def generate_query(
     query_data: QueryRequest,
-    company: CurrentCompany,
+    company: CurrentCompanyEither,
     db: Session = Depends(get_db)
 ):
     """
@@ -95,6 +99,23 @@ async def generate_query(
     - Query saved to history for analytics
     """
     try:
+        # Resolve session (validate ownership or create if needed)
+        session_svc = SessionService(db)
+        resolved_session = None
+        turn_number = None
+
+        if query_data.session_id is not None:
+            resolved_session = session_svc.get_session(
+                session_id=query_data.session_id,
+                company_id=company.id
+            )
+            if not resolved_session:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Session {query_data.session_id} not found or access denied"
+                )
+            turn_number = session_svc.next_turn_number(resolved_session.id)
+
         # Generate SQL
         generator = SQLGenerator()
         result = await generator.generate_sql(
@@ -115,6 +136,15 @@ async def generate_query(
             status=QueryStatus.SUCCESS
         )
 
+        # Attach session info if provided
+        if resolved_session is not None:
+            query_record.session_id = resolved_session.id
+            query_record.turn_number = turn_number
+            db.commit()
+
+            # Set session title from first question
+            session_svc.set_title_if_empty(resolved_session, query_data.query)
+
         return QueryResponse(
             id=query_record.id,
             natural_language_query=query_record.natural_language_query,
@@ -123,9 +153,13 @@ async def generate_query(
             warnings=result.warnings,
             ai_provider=query_record.ai_provider,
             ai_model=query_record.ai_model,
+            session_id=resolved_session.id if resolved_session else None,
+            turn_number=turn_number,
             created_at=query_record.created_at.isoformat()
         )
 
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -144,7 +178,7 @@ async def generate_query(
     summary="Get query history"
 )
 async def get_query_history(
-    company: CurrentCompany,
+    company: CurrentCompanyEither,
     db: Session = Depends(get_db),
     schema_id: Optional[UUID] = None,
     limit: int = 50
@@ -201,7 +235,7 @@ async def get_query_history(
 )
 async def get_query(
     query_id: UUID,
-    company: CurrentCompany,
+    company: CurrentCompanyEither,
     db: Session = Depends(get_db)
 ):
     """
@@ -258,7 +292,7 @@ class QueryFeedbackResponse(BaseModel):
 async def submit_query_feedback(
     query_id: UUID,
     feedback: QueryFeedbackRequest,
-    company: CurrentCompany,
+    company: CurrentCompanyEither,
     db: Session = Depends(get_db)
 ):
     """
@@ -308,7 +342,7 @@ async def submit_query_feedback(
     if feedback.is_correct and feedback.is_helpful:
         query.status = QueryStatus.SUCCESS
     elif not feedback.is_correct:
-        query.status = QueryStatus.FAILED
+        query.status = QueryStatus.ERROR
 
     db.commit()
 
@@ -344,7 +378,7 @@ async def submit_query_feedback(
 )
 async def validate_query(
     query_id: UUID,
-    company: CurrentCompany,
+    company: CurrentCompanyEither,
     db: Session = Depends(get_db),
     is_helpful: bool = True,
     is_correct: bool = True

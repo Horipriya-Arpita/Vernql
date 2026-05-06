@@ -149,44 +149,55 @@ class CodeGenerator:
         """Get setup instructions for a specific language"""
         instructions = {
             "python_flask": """
-1. Install required packages: `pip install requests flask`
-2. Set your API key in the code
-3. Run the Flask app: `python app.py`
-4. Access the endpoint at http://localhost:5000/query
+1. Install dependencies: `pip install flask requests`
+   Add your database driver, e.g. `pip install psycopg2-binary` for PostgreSQL
+2. Set VERNQL_API_KEY, VERNQL_BASE_URL, and SCHEMA_ID at the top of the file
+3. Implement `run_on_your_database(sql)` to connect to your own database
+4. Run: `python app.py`
+5. POST /query with {"question": "..."} — the full NL→SQL→run→visualize flow runs automatically
             """.strip(),
 
             "python_fastapi": """
-1. Install required packages: `pip install requests fastapi uvicorn`
-2. Set your API key in the code
-3. Run the FastAPI app: `uvicorn main:app --reload`
-4. Access the endpoint at http://localhost:8000/query
+1. Install dependencies: `pip install fastapi uvicorn httpx`
+   Add your database driver, e.g. `pip install asyncpg` for async PostgreSQL
+2. Set VERNQL_API_KEY, VERNQL_BASE_URL, and SCHEMA_ID at the top of the file
+3. Implement `run_on_your_database(sql)` to connect to your own database
+4. Run: `uvicorn main:app --reload`
+5. Docs at http://localhost:8000/docs — POST /query for the full flow
             """.strip(),
 
             "python_django": """
-1. Install required packages: `pip install requests django`
-2. Set your API key in Django settings
-3. Add the view to your urls.py
-4. Run the server: `python manage.py runserver`
+1. Install dependencies: `pip install django requests`
+   Add your database driver, e.g. `pip install psycopg2-binary` for PostgreSQL
+2. Add VERNQL_API_KEY, VERNQL_BASE_URL, VERNQL_SCHEMA_ID to settings.py
+3. Implement `run_on_your_database(sql)` — example using Django's own connection is in the file
+4. Wire query_view and health_view into your urls.py (see bottom of file)
+5. POST /api/query/ with {"question": "..."} for the full flow
             """.strip(),
 
             "nodejs_express": """
-1. Install required packages: `npm install express axios`
-2. Set your API key in the code
-3. Run the server: `node server.js`
-4. Access the endpoint at http://localhost:3000/query
+1. Install dependencies: `npm install express axios`
+   Add your database driver, e.g. `npm install pg` for PostgreSQL
+2. Set VERNQL_API_KEY, VERNQL_BASE_URL, and SCHEMA_ID at the top of the file
+3. Implement `runOnYourDatabase(sql)` — example using `pg` is in the file
+4. Run: `node server.js`
+5. POST /query with {"question": "..."} for the full flow
             """.strip(),
 
             "php": """
-1. Ensure PHP curl extension is enabled
-2. Set your API key in the code
-3. Deploy to your PHP server
-4. Access the endpoint via HTTP POST
+1. Ensure the PHP curl extension is enabled (php-curl)
+   Add your database extension, e.g. php-pgsql for PostgreSQL
+2. Set VERNQL_API_KEY, VERNQL_BASE_URL, and SCHEMA_ID at the top of the file
+3. Implement `run_on_your_database($sql)` — example using PDO is in the file
+4. Deploy to your PHP server
+5. POST /query.php with {"question": "..."} for the full flow
             """.strip(),
 
             "curl": """
-1. Replace YOUR_API_KEY with your actual API key
-2. Replace your-schema-id with your schema UUID
-3. Run the command in your terminal
+1. Replace the API_KEY and SCHEMA_ID variables at the top of the script
+2. Follow the 4-step flow in order: session → SQL → execute → submit results
+3. Implement Step 3 with your real database CLI (psql, mysql, etc.)
+4. The script requires python3 for JSON parsing (or adapt to jq)
             """.strip()
         }
 

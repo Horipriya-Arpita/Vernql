@@ -90,17 +90,17 @@ For issues and feature requests, visit our documentation.
     ]
 )
 
-# CORS Configuration
+# Rate Limiting Middleware (inner — must be inside CORS so CORS headers apply to its error responses)
+app.add_middleware(RateLimitMiddleware)
+
+# CORS Configuration (outer — must be outermost so all responses get CORS headers)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Rate Limiting Middleware
-app.add_middleware(RateLimitMiddleware)
 
 
 # Request Logging Middleware

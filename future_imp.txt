@@ -1,0 +1,12 @@
+The UX gap worth noting
+Right now the dashboard shows no warning when a key is about to expire. A user could wake up to broken integrations with no prior notice. 
+A useful future improvement would be to show a warning badge (e.g. "Expires in 3 days") on keys approaching their expiry date — 
+the expires_at field is already returned in the key list response, so it's purely a UI addition.
+
+Here in this project how you are approaching the visualization process? Let's say Sarah is the User of Vernql tool, 
+she integrates it with her project with uploading schema, let's say Sarah make a plain Englinsh question in her project, 
+the question sent to the vernql server, vernql make the sql and send back to the sarah's project, 
+sarah make her database run the sql code, and send the respnse to the vernql tool again. 
+now what is the approch vernql take to show the received answer? it may answer in one line or make a table or chart to answer. 
+and what type of data vernql will accept from user project of database response? is it need to be json or what? 
+is the visualization process will vary in different integration approach (like widget, iframe, npm package, or normal)? help me at this point

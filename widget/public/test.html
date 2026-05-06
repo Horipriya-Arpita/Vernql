@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vernql Widget Test</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            background: white;
+            border-radius: 16px;
+            padding: 48px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            font-size: 36px;
+            font-weight: 700;
+            color: #1a202c;
+            margin-bottom: 16px;
+        }
+
+        .subtitle {
+            font-size: 18px;
+            color: #718096;
+            margin-bottom: 32px;
+        }
+
+        .badge {
+            display: inline-block;
+            background: #3b82f6;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 24px;
+        }
+
+        .feature-list {
+            list-style: none;
+            margin-bottom: 32px;
+        }
+
+        .feature-list li {
+            padding: 12px 0;
+            font-size: 16px;
+            color: #4a5568;
+            display: flex;
+            align-items: center;
+        }
+
+        .feature-list li::before {
+            content: "✓";
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            background: #10b981;
+            color: white;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 24px;
+            margin-right: 12px;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        .cta-button {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            color: white;
+            border: none;
+            padding: 16px 32px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 16px rgba(59, 130, 246, 0.3);
+        }
+
+        .note {
+            margin-top: 32px;
+            padding: 16px;
+            background: #fef3c7;
+            border-left: 4px solid #f59e0b;
+            border-radius: 4px;
+        }
+
+        .note p {
+            color: #92400e;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .note strong {
+            color: #78350f;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="badge">Demo Page</div>
+        <h1>Vernql Widget Integration Test</h1>
+        <p class="subtitle">
+            This page demonstrates how the Vernql widget works on any website.
+        </p>
+
+        <ul class="feature-list">
+            <li>Works with any tech stack (PHP, React, WordPress, etc.)</li>
+            <li>No build process required</li>
+            <li>Drop-in chat interface for SQL generation</li>
+            <li>Fully customizable theme and position</li>
+            <li>Mobile responsive</li>
+        </ul>
+
+        <button class="cta-button" onclick="Vernql.open()">
+            Open Widget Manually
+        </button>
+
+        <div class="note">
+            <p>
+                <strong>Note:</strong> Click the blue chat button in the bottom-right corner to test the widget!
+                The widget is embedded using just 2 script tags - no framework required.
+            </p>
+        </div>
+    </div>
+
+    <!-- Vernql Widget Integration (This is all a company needs!) -->
+    <script src="/embed.js"></script>
+    <script>
+        Vernql.init({
+            apiKey: 'demo-api-key',  // Replace with real API key
+            schemaId: 'demo-schema-id',  // Replace with real schema ID
+            apiUrl: 'http://localhost:8000',
+            theme: 'auto',  // 'light', 'dark', or 'auto'
+            position: 'bottom-right',  // 'bottom-right' or 'bottom-left'
+            title: 'SQL Assistant',
+            placeholder: 'Ask a question about your data...'
+        })
+    </script>
+</body>
+</html>

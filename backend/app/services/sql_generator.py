@@ -116,13 +116,13 @@ class SQLGenerator:
                 limit=3
             )
 
-        # Build prompt using PromptBuilder
+        # Build prompt using PromptBuilder — uses token-budget strategy (5 degradation levels)
         prompt_builder = PromptBuilder(db_type=schema.db_type.value)
-        prompt = prompt_builder.build_sql_generation_prompt(
+        prompt = prompt_builder.optimize_prompt_length(
             schema=schema,
             natural_language_query=natural_language_query,
             examples=examples,
-            include_schema_descriptions=True
+            max_tokens=12000,
         )
 
         # Call AI
@@ -207,12 +207,15 @@ class SQLGenerator:
         # Remove any trailing semicolon (we'll add it when executing)
         sql = sql.rstrip(';')
 
-        # Format SQL nicely
+        # Format SQL nicely — strip_whitespace only, no keyword_case transformation.
+        # keyword_case='upper' would uppercase unquoted identifiers that happen to
+        # be SQL keywords (e.g. User → USER, Order → ORDER), breaking PostgreSQL
+        # queries where those are table names. Quoted identifiers are safe but the
+        # AI doesn't always quote them, so we avoid the transformation entirely.
         try:
             sql = sqlparse.format(
                 sql,
                 reindent=True,
-                keyword_case='upper'
             )
         except Exception as e:
             self.logger.warning("SQL formatting failed", error=str(e))

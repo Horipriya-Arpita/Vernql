@@ -1,156 +1,198 @@
 /**
- * TextSQL API Integration - Express.js Example
- * Demonstrates how to integrate TextSQL API into an Express application
+ * Vernql API Integration — Node.js / Express
+ * Complete integration including session management, SQL execution,
+ * and the result feedback loop that drives widget visualizations.
+ *
+ * Install: npm install express axios
  */
 const express = require('express');
-const axios = require('axios');
+const axios   = require('axios');
 
 const app = express();
 app.use(express.json());
 
-// TextSQL API Configuration
-const TEXTSQL_API_KEY = '{{ api_key }}';
-const TEXTSQL_BASE_URL = '{{ base_url }}';
-const SCHEMA_ID = '{{ schema_id }}';
+// ── Configuration ─────────────────────────────────────────────────────────────
+const VERNQL_API_KEY  = '{{ api_key }}';
+const VERNQL_BASE_URL = '{{ base_url }}';
+const SCHEMA_ID       = '{{ schema_id }}';
+
+const vernqlHeaders = {
+  'X-API-Key': VERNQL_API_KEY,
+  'Content-Type': 'application/json',
+};
+
+
+// ── Step 1 · Session ──────────────────────────────────────────────────────────
 
 /**
- * Generate SQL from natural language using TextSQL API
- *
- * @param {string} naturalLanguageQuery - Natural language question
- * @returns {Promise<Object>} Response containing generated SQL and metadata
- * @throws {Error} If API request fails
+ * Create a new conversational session.
+ * Returns a session_id that groups queries so the AI keeps context
+ * across follow-up questions and pushes results to the widget via SSE.
+ * Store this ID (e.g. in Redis or your DB) and reuse it per user.
  */
-async function generateSQL(naturalLanguageQuery) {
-    const url = `${TEXTSQL_BASE_URL}/{{ api_version }}/queries`;
-
-    const headers = {
-        'X-API-Key': TEXTSQL_API_KEY,
-        'Content-Type': 'application/json'
-    };
-
-    const payload = {
-        schema_id: SCHEMA_ID,
-        query: naturalLanguageQuery
-    };
-
-    try {
-        const response = await axios.post(url, payload, {
-            headers,
-            timeout: 30000
-        });
-        return response.data;
-    } catch (error) {
-        if (error.response) {
-            // API returned an error response
-            throw new Error(`TextSQL API error: ${error.response.status} - ${error.response.data.detail || error.response.statusText}`);
-        } else if (error.request) {
-            // No response received
-            throw new Error('TextSQL API request timeout or network error');
-        } else {
-            throw error;
-        }
-    }
+async function vernqlCreateSession() {
+  const resp = await axios.post(
+    `${VERNQL_BASE_URL}/{{ api_version }}/sessions`,
+    { schema_id: SCHEMA_ID },
+    { headers: vernqlHeaders, timeout: 10000 }
+  );
+  return resp.data.session_id;
 }
 
+
+// ── Step 2 · SQL Generation ───────────────────────────────────────────────────
+
 /**
- * POST /query - Convert natural language to SQL
+ * Convert a natural language question to SQL.
+ * Pass sessionId to maintain multi-turn context across questions.
+ * Returns: { id, generated_sql, confidence_score, warnings, ... }
+ */
+async function vernqlGenerateSQL(question, sessionId = null) {
+  const payload = { schema_id: SCHEMA_ID, query: question };
+  if (sessionId) payload.session_id = sessionId;
+
+  const resp = await axios.post(
+    `${VERNQL_BASE_URL}/{{ api_version }}/queries`,
+    payload,
+    { headers: vernqlHeaders, timeout: 30000 }
+  );
+  return resp.data;
+}
+
+
+// ── Step 3 · Execute on YOUR database ────────────────────────────────────────
+//
+//  TODO: Replace this stub with your real database connection.
+//  Only SELECT queries reach here — Vernql blocks all destructive commands.
+//
+//  Must return an array of row objects, e.g.:
+//    [{ product: 'Widget A', sales: 1500 }, ...]
+//
+//  Example — PostgreSQL with pg:
+//    const { Pool } = require('pg');
+//    const pool = new Pool({ connectionString: 'postgresql://user:pass@host/db' });
+//    async function runOnYourDatabase(sql) {
+//      const { rows } = await pool.query(sql);
+//      return rows;
+//    }
+//
+async function runOnYourDatabase(sql) {
+  throw new Error('Connect runOnYourDatabase() to your real database.');
+}
+
+
+// ── Step 4 · Submit results for visualization ─────────────────────────────────
+
+/**
+ * Send query results back to Vernql.
+ * Vernql auto-detects the best chart type (bar, line, pie, metric, table),
+ * generates an AI insight, and — when sessionId is present — pushes the
+ * visualization to any widget connected to that session via SSE.
+ * Returns: { chart_type, ai_insight, visualization_data, ... }
+ */
+async function vernqlSubmitResults(queryId, rows, sessionId = null) {
+  const payload = {
+    query_id: queryId,
+    results: rows,
+    generate_insight: true,
+  };
+  if (sessionId) payload.session_id = sessionId;
+
+  const resp = await axios.post(
+    `${VERNQL_BASE_URL}/{{ api_version }}/visualizations/display`,
+    payload,
+    { headers: vernqlHeaders, timeout: 30000 }
+  );
+  return resp.data;
+}
+
+
+// ── Route ─────────────────────────────────────────────────────────────────────
+
+/**
+ * POST /query — Full Vernql integration: NL → SQL → execute → visualize.
  *
- * Example request:
- * POST /query
- * Content-Type: application/json
- * {
- *     "question": "{{ query_example }}"
- * }
+ * Body:
+ *   question   string   required  Natural language question
+ *   session_id string   optional  Reuse for follow-up questions
+ *
+ * Response:
+ *   session_id         Use for the next question in the same conversation
+ *   sql                Generated SELECT statement
+ *   query_id           Needed if you want to submit results manually
+ *   chart_type         bar | line | pie | metric | table
+ *   ai_insight         One-sentence AI summary of the results
+ *   visualization_data Chart-ready data structure
+ *
+ * First question:
+ *   POST /query  { "question": "{{ query_example }}" }
+ *
+ * Follow-up:
+ *   POST /query  { "question": "Now filter to last 30 days", "session_id": "<from above>" }
  */
 app.post('/query', async (req, res) => {
+  const { question, session_id: incomingSessionId } = req.body;
+
+  if (!question) {
+    return res.status(400).json({ error: "Missing 'question'" });
+  }
+
+  let sessionId = incomingSessionId || null;
+
+  // Create a session on the first turn if the caller didn't supply one
+  if (!sessionId) {
     try {
-        const { question } = req.body;
-
-        if (!question) {
-            return res.status(400).json({
-                success: false,
-                error: "Missing 'question' in request body"
-            });
-        }
-
-        // Generate SQL using TextSQL API
-        const result = await generateSQL(question);
-
-        res.json({
-            success: true,
-            sql: result.generated_sql,
-            confidence: result.confidence_score,
-            warnings: result.warnings || []
-        });
-
-    } catch (error) {
-        console.error('Query generation failed:', error.message);
-
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
+      sessionId = await vernqlCreateSession();
+    } catch (err) {
+      console.warn('[Vernql] Could not create session:', err.message);
+      // widget still works without SSE; continue without session
     }
-});
+  }
 
-/**
- * GET /health - Health check endpoint
- */
-app.get('/health', (req, res) => {
-    res.json({ status: 'healthy' });
-});
+  try {
+    // Step 2 — Generate SQL
+    const queryResult = await vernqlGenerateSQL(question, sessionId);
+    const { generated_sql: sql, id: queryId } = queryResult;
 
-/**
- * GET / - Root endpoint with API information
- */
-app.get('/', (req, res) => {
+    // Step 3 — Run the SQL on YOUR database
+    const rows = await runOnYourDatabase(sql);
+
+    // Step 4 — Submit results; Vernql visualizes and pushes to widget via SSE
+    const viz = await vernqlSubmitResults(queryId, rows, sessionId);
+
     res.json({
-        service: 'TextSQL Integration API',
-        endpoints: {
-            query: 'POST /query',
-            health: 'GET /health'
-        },
-        example: {
-            url: '/query',
-            method: 'POST',
-            body: {
-                question: '{{ query_example }}'
-            }
-        }
+      success:            true,
+      session_id:         sessionId,
+      sql,
+      query_id:           queryId,
+      chart_type:         viz.chart_type,
+      ai_insight:         viz.ai_insight,
+      visualization_data: viz.visualization_data,
     });
+
+  } catch (err) {
+    const status = err.message.startsWith('Connect') ? 501
+                 : err.response                      ? 502
+                 :                                     500;
+    console.error('[Vernql] Query failed:', err.message);
+    res.status(status).json({ error: err.message });
+  }
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-    console.error('Unhandled error:', err);
-    res.status(500).json({
-        success: false,
-        error: 'Internal server error'
-    });
+app.get('/health', (_req, res) => res.json({ status: 'healthy' }));
+
+// Error-handling middleware
+app.use((err, _req, res, _next) => {
+  console.error('[Vernql] Unhandled error:', err);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
-// Start server
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
-    console.log('TextSQL Express Integration Example');
-    console.log('-'.repeat(50));
-    console.log(`Server running on http://localhost:${PORT}`);
-    console.log(`Try: curl -X POST http://localhost:${PORT}/query -H "Content-Type: application/json" -d '{"question":"Show all users"}'`);
-    console.log('-'.repeat(50));
-
-    // Example usage
-    (async () => {
-        try {
-            const testQuery = '{{ query_example }}';
-            const result = await generateSQL(testQuery);
-            console.log(`\nExample Query: ${testQuery}`);
-            console.log(`Generated SQL: ${result.generated_sql}`);
-            console.log(`Confidence: ${(result.confidence_score * 100).toFixed(1)}%`);
-        } catch (error) {
-            console.error('Example failed:', error.message);
-        }
-    })();
+  console.log('Vernql Express Integration');
+  console.log('-'.repeat(40));
+  console.log(`Server: http://localhost:${PORT}`);
+  console.log('POST /query — NL → SQL → run → visualize');
 });
 
 module.exports = app;

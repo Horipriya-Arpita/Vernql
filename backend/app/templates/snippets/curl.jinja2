@@ -1,127 +1,157 @@
 #!/bin/bash
-# TextSQL API Integration - cURL Examples
-# Use these commands to test the TextSQL API from the command line
+# Vernql API — cURL Reference
+# Complete 4-step integration: session → SQL → execute → visualize
+# ─────────────────────────────────────────────────────────────────────────────
 
-# Configuration
 API_KEY="{{ api_key }}"
 BASE_URL="{{ base_url }}"
 SCHEMA_ID="{{ schema_id }}"
 
-echo "TextSQL API - cURL Examples"
-echo "=================================="
+echo "Vernql API — cURL Reference"
+echo "=================================================="
 echo ""
 
-# 1. Upload a database schema
-echo "1. Upload Database Schema"
-echo "-------------------------"
-cat << 'EOF'
-curl -X POST "${BASE_URL}/v1/schemas" \
-  -H "X-API-Key: ${API_KEY}" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "My Database",
-    "connection_string": "postgresql://user:password@localhost:5432/mydb",
-    "include_sample_data": true
-  }'
-EOF
-echo ""
-echo ""
 
-# 2. List all schemas
-echo "2. List All Schemas"
-echo "-------------------"
-echo "curl -X GET \"${BASE_URL}/v1/schemas\" \\"
-echo "  -H \"X-API-Key: ${API_KEY}\""
-echo ""
-echo ""
+# ── Step 1 · Create a session ─────────────────────────────────────────────────
+#
+# A session groups your queries so:
+#   • The AI maintains context across follow-up questions
+#   • Results are pushed to the widget via SSE after submission
+#
+# Save the returned session_id and pass it in every subsequent request.
 
-# 3. Get schema details
-echo "3. Get Schema Details"
-echo "---------------------"
-echo "curl -X GET \"${BASE_URL}/v1/schemas/${SCHEMA_ID}\" \\"
-echo "  -H \"X-API-Key: ${API_KEY}\""
-echo ""
-echo ""
-
-# 4. Enrich schema with AI descriptions
-echo "4. Enrich Schema with AI"
-echo "------------------------"
-echo "curl -X POST \"${BASE_URL}/v1/schemas/${SCHEMA_ID}/enrich\" \\"
-echo "  -H \"X-API-Key: ${API_KEY}\""
-echo ""
-echo ""
-
-# 5. Generate SQL from natural language
-echo "5. Generate SQL from Natural Language"
-echo "--------------------------------------"
+echo "Step 1 — Create a session"
+echo "--------------------------"
 cat << EOF
-curl -X POST "${BASE_URL}/v1/queries" \\
+SESSION_ID=\$(curl -s -X POST "${BASE_URL}/v1/sessions" \\
   -H "X-API-Key: ${API_KEY}" \\
   -H "Content-Type: application/json" \\
-  -d '{
-    "schema_id": "${SCHEMA_ID}",
-    "query": "{{ query_example }}"
-  }'
+  -d '{"schema_id": "${SCHEMA_ID}"}' \\
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['session_id'])")
+
+echo "Session ID: \$SESSION_ID"
 EOF
 echo ""
 echo ""
 
-# 6. Get query history
-echo "6. Get Query History"
-echo "--------------------"
-echo "curl -X GET \"${BASE_URL}/v1/queries?limit=10\" \\"
-echo "  -H \"X-API-Key: ${API_KEY}\""
-echo ""
-echo ""
 
-# 7. Get specific query by ID
-echo "7. Get Specific Query"
-echo "---------------------"
-echo "QUERY_ID=\"your-query-id-here\""
-echo "curl -X GET \"${BASE_URL}/v1/queries/\${QUERY_ID}\" \\"
-echo "  -H \"X-API-Key: ${API_KEY}\""
-echo ""
-echo ""
+# ── Step 2 · Generate SQL from natural language ───────────────────────────────
+#
+# Pass session_id to link this query to the session.
+# Save the returned id as QUERY_ID — you'll need it in step 4.
 
-# 8. Submit feedback on a query
-echo "8. Submit Query Feedback"
-echo "------------------------"
-cat << 'EOF'
-QUERY_ID="your-query-id-here"
-curl -X POST "${BASE_URL}/v1/queries/${QUERY_ID}/feedback" \
-  -H "X-API-Key: ${API_KEY}" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "is_helpful": true,
-    "is_correct": true,
-    "feedback_notes": "Perfect query!"
-  }'
-EOF
-echo ""
-echo ""
-
-# 9. Health check
-echo "9. Health Check"
-echo "---------------"
-echo "curl -X GET \"${BASE_URL}/health\""
-echo ""
-echo ""
-
-# Quick test function
-echo "=================================="
-echo "Quick Test"
-echo "=================================="
-echo ""
-echo "Run this command to test SQL generation:"
-echo ""
+echo "Step 2 — Generate SQL"
+echo "----------------------"
 cat << EOF
-curl -X POST "${BASE_URL}/v1/queries" \\
+QUERY_RESPONSE=\$(curl -s -X POST "${BASE_URL}/v1/queries" \\
   -H "X-API-Key: ${API_KEY}" \\
   -H "Content-Type: application/json" \\
-  -d '{
-    "schema_id": "${SCHEMA_ID}",
-    "query": "{{ query_example }}"
-  }' | python -m json.tool
+  -d "{
+    \"schema_id\": \"${SCHEMA_ID}\",
+    \"query\":     \"{{ query_example }}\",
+    \"session_id\": \"\$SESSION_ID\"
+  }")
+
+QUERY_ID=\$(echo \$QUERY_RESPONSE | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+SQL=\$(echo \$QUERY_RESPONSE      | python3 -c "import sys,json; print(json.load(sys.stdin)['generated_sql'])")
+
+echo "Query ID : \$QUERY_ID"
+echo "SQL      : \$SQL"
 EOF
 echo ""
-echo "Note: The '| python -m json.tool' part formats the JSON output (optional)"
+echo ""
+
+
+# ── Step 3 · Execute on YOUR database ────────────────────────────────────────
+#
+# Run the generated SQL on your own database.
+# Vernql never connects to your database directly.
+#
+# Example — PostgreSQL (psql):
+#   ROWS=\$(psql "postgresql://user:pass@host/db" -c "\$SQL" --csv | python3 -c "
+#   import sys, csv, json
+#   reader = csv.DictReader(sys.stdin)
+#   print(json.dumps(list(reader)))
+#   ")
+#
+# The result must be a JSON array of row objects, e.g.:
+#   [{"product": "Widget A", "sales": "1500"}, ...]
+
+echo "Step 3 — Execute on YOUR database"
+echo "-----------------------------------"
+cat << 'EXAMPLE'
+# Replace this with your real database execution.
+ROWS='[{"product": "Widget A", "sales": 1500}, {"product": "Widget B", "sales": 2300}]'
+echo "Rows: $ROWS"
+EXAMPLE
+echo ""
+echo ""
+
+
+# ── Step 4 · Submit results for visualization ─────────────────────────────────
+#
+# Send the rows back to Vernql with the QUERY_ID and SESSION_ID.
+# Vernql will:
+#   • Auto-detect the best chart type (bar, line, pie, metric, table)
+#   • Generate a one-sentence AI insight
+#   • Push the visualization to any widget SSE stream connected to this session
+
+echo "Step 4 — Submit results for visualization"
+echo "------------------------------------------"
+cat << EOF
+curl -s -X POST "${BASE_URL}/v1/visualizations/display" \\
+  -H "X-API-Key: ${API_KEY}" \\
+  -H "Content-Type: application/json" \\
+  -d "{
+    \"query_id\":         \"\$QUERY_ID\",
+    \"session_id\":       \"\$SESSION_ID\",
+    \"results\":          \$ROWS,
+    \"generate_insight\": true
+  }" | python3 -m json.tool
+EOF
+echo ""
+echo ""
+
+
+# ── Follow-up question ────────────────────────────────────────────────────────
+#
+# For the next question in the same conversation, skip step 1
+# and reuse SESSION_ID.  The AI will remember what was asked before.
+
+echo "Follow-up question (reuse session, skip step 1)"
+echo "--------------------------------------------------"
+cat << EOF
+curl -s -X POST "${BASE_URL}/v1/queries" \\
+  -H "X-API-Key: ${API_KEY}" \\
+  -H "Content-Type: application/json" \\
+  -d "{
+    \"schema_id\": \"${SCHEMA_ID}\",
+    \"query\":     \"Now filter to last 30 days\",
+    \"session_id\": \"\$SESSION_ID\"
+  }" | python3 -m json.tool
+EOF
+echo ""
+echo ""
+
+
+# ── Other useful endpoints ────────────────────────────────────────────────────
+
+echo "Other useful endpoints"
+echo "=========================="
+echo ""
+
+echo "List sessions:"
+echo "  curl -s \"${BASE_URL}/v1/sessions\" -H \"X-API-Key: ${API_KEY}\" | python3 -m json.tool"
+echo ""
+
+echo "Session history (all turns):"
+echo "  curl -s \"${BASE_URL}/v1/sessions/\$SESSION_ID/history\" -H \"X-API-Key: ${API_KEY}\" | python3 -m json.tool"
+echo ""
+
+echo "Health check:"
+echo "  curl -s \"${BASE_URL}/health\""
+echo ""
+
+echo "List schemas:"
+echo "  curl -s \"${BASE_URL}/v1/schemas\" -H \"X-API-Key: ${API_KEY}\" | python3 -m json.tool"
+echo ""

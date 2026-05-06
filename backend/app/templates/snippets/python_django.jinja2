@@ -1,151 +1,209 @@
 """
-TextSQL API Integration - Django Example
-Demonstrates how to integrate TextSQL API into a Django application
+Vernql API Integration — Django
+Complete integration including session management, SQL execution,
+and the result feedback loop that drives widget visualizations.
 
-Add this to your Django app's views.py
+Add this file to your Django app (e.g. yourapp/vernql.py),
+then wire the view into urls.py (see bottom of file).
 """
-import requests
-from django.http import JsonResponse
-from django.views.decorators.http import require_http_methods
-from django.views.decorators.csrf import csrf_exempt
 import json
-
-# TextSQL API Configuration
-# Add these to your Django settings.py:
-# TEXTSQL_API_KEY = "{{ api_key }}"
-# TEXTSQL_BASE_URL = "{{ base_url }}"
-# TEXTSQL_SCHEMA_ID = "{{ schema_id }}"
-
+import requests
 from django.conf import settings
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
 
-TEXTSQL_API_KEY = getattr(settings, 'TEXTSQL_API_KEY', '{{ api_key }}')
-TEXTSQL_BASE_URL = getattr(settings, 'TEXTSQL_BASE_URL', '{{ base_url }}')
-SCHEMA_ID = getattr(settings, 'TEXTSQL_SCHEMA_ID', '{{ schema_id }}')
+# ── Configuration ─────────────────────────────────────────────────────────────
+# Add these to your settings.py, or set them directly here.
+VERNQL_API_KEY  = getattr(settings, "VERNQL_API_KEY",  "{{ api_key }}")
+VERNQL_BASE_URL = getattr(settings, "VERNQL_BASE_URL", "{{ base_url }}")
+SCHEMA_ID       = getattr(settings, "VERNQL_SCHEMA_ID", "{{ schema_id }}")
+
+_HEADERS = {
+    "X-API-Key": VERNQL_API_KEY,
+    "Content-Type": "application/json",
+}
 
 
-def generate_sql(natural_language_query):
+# ── Step 1 · Session ──────────────────────────────────────────────────────────
+
+def vernql_create_session():
     """
-    Generate SQL from natural language using TextSQL API
-
-    Args:
-        natural_language_query: Natural language question
-
-    Returns:
-        dict: Response containing generated SQL and metadata, or None on error
+    Create a new conversational session.
+    Returns a session_id that groups queries so the AI keeps context
+    across follow-up questions and pushes results to the widget via SSE.
+    Store this ID (e.g. in Django session or your database) per user.
     """
-    url = f"{TEXTSQL_BASE_URL}/{{ api_version }}/queries"
+    resp = requests.post(
+        f"{VERNQL_BASE_URL}/{{ api_version }}/sessions",
+        json={"schema_id": SCHEMA_ID},
+        headers=_HEADERS,
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.json()["session_id"]
 
-    headers = {
-        "X-API-Key": TEXTSQL_API_KEY,
-        "Content-Type": "application/json"
-    }
 
+# ── Step 2 · SQL Generation ───────────────────────────────────────────────────
+
+def vernql_generate_sql(question, session_id=None):
+    """
+    Convert a natural language question to SQL.
+    Pass session_id to maintain multi-turn context across questions.
+    Returns dict with keys: id (query_id), generated_sql, confidence_score, warnings.
+    """
+    payload = {"schema_id": SCHEMA_ID, "query": question}
+    if session_id:
+        payload["session_id"] = session_id
+
+    resp = requests.post(
+        f"{VERNQL_BASE_URL}/{{ api_version }}/queries",
+        json=payload,
+        headers=_HEADERS,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+# ── Step 3 · Execute on YOUR database ────────────────────────────────────────
+#
+#  TODO: Replace this stub with your real database connection.
+#  Only SELECT queries reach here — Vernql blocks all destructive commands.
+#
+#  Must return a list of row dicts, e.g.:
+#    [{"product": "Widget A", "sales": 1500}, ...]
+#
+#  Example — using Django's own DB connection:
+#    from django.db import connection
+#    with connection.cursor() as cursor:
+#        cursor.execute(sql)
+#        cols = [col[0] for col in cursor.description]
+#        return [dict(zip(cols, row)) for row in cursor.fetchall()]
+#
+def run_on_your_database(sql):
+    raise NotImplementedError("Connect run_on_your_database() to your real database.")
+
+
+# ── Step 4 · Submit results for visualization ─────────────────────────────────
+
+def vernql_submit_results(query_id, rows, session_id=None):
+    """
+    Send query results back to Vernql.
+    Vernql auto-detects the best chart type (bar, line, pie, metric, table),
+    generates an AI insight, and — when session_id is present — pushes the
+    visualization to any widget connected to that session via SSE.
+    Returns dict with keys: chart_type, ai_insight, visualization_data.
+    """
     payload = {
-        "schema_id": SCHEMA_ID,
-        "query": natural_language_query
+        "query_id": query_id,
+        "results": rows,
+        "generate_insight": True,
     }
+    if session_id:
+        payload["session_id"] = session_id
 
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
-        response.raise_for_status()
-        return response.json()
+    resp = requests.post(
+        f"{VERNQL_BASE_URL}/{{ api_version }}/visualizations/display",
+        json=payload,
+        headers=_HEADERS,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
 
-    except requests.exceptions.RequestException as e:
-        print(f"TextSQL API request failed: {e}")
-        return None
 
+# ── View ──────────────────────────────────────────────────────────────────────
 
-@csrf_exempt  # Remove in production - use proper CSRF handling
+@csrf_exempt  # Remove in production — use Django's CSRF middleware properly
 @require_http_methods(["POST"])
 def query_view(request):
     """
-    Django view to convert natural language to SQL
+    Full Vernql integration — NL → SQL → execute → visualize.
 
-    Example request:
-    POST /api/query/
-    Content-Type: application/json
-    {
-        "question": "{{ query_example }}"
-    }
+    Request body (JSON):
+        question   string   required  Natural language question
+        session_id string   optional  Reuse an existing session for follow-ups
+
+    Response (JSON):
+        session_id        string  Use for the next question in the same conversation
+        sql               string  Generated SELECT statement
+        query_id          string
+        chart_type        string  bar | line | pie | metric | table
+        ai_insight        string  One-sentence AI summary of the results
+        visualization_data object Chart-ready data structure
+
+    Example first question:
+        POST /api/query/
+        { "question": "{{ query_example }}" }
+
+    Example follow-up:
+        POST /api/query/
+        { "question": "Now filter to last 30 days", "session_id": "<from above>" }
 
     Add to urls.py:
-    from .views import query_view
-    urlpatterns = [
-        path('api/query/', query_view, name='query'),
-    ]
+        from yourapp.vernql import query_view
+        urlpatterns += [path("api/query/", query_view)]
     """
     try:
-        # Parse request body
         data = json.loads(request.body)
-        question = data.get('question')
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
 
-        if not question:
-            return JsonResponse({
-                "success": False,
-                "error": "Missing 'question' in request"
-            }, status=400)
+    question = data.get("question", "").strip()
+    if not question:
+        return JsonResponse({"error": "Missing 'question'"}, status=400)
 
-        # Generate SQL using TextSQL API
-        result = generate_sql(question)
+    session_id = data.get("session_id")
 
-        if result:
-            return JsonResponse({
-                "success": True,
-                "sql": result.get("generated_sql"),
-                "confidence": result.get("confidence_score"),
-                "warnings": result.get("warnings", [])
-            })
-        else:
-            return JsonResponse({
-                "success": False,
-                "error": "Failed to generate SQL"
-            }, status=500)
+    # Create a session on the first turn if the caller didn't supply one
+    if not session_id:
+        try:
+            session_id = vernql_create_session()
+        except Exception:
+            pass  # widget still works without SSE; continue without session
 
-    except json.JSONDecodeError:
+    try:
+        # Step 2 — Generate SQL
+        query_result = vernql_generate_sql(question, session_id)
+        sql      = query_result["generated_sql"]
+        query_id = query_result["id"]
+
+        # Step 3 — Run the SQL on YOUR database
+        rows = run_on_your_database(sql)
+
+        # Step 4 — Submit results; Vernql visualizes and pushes to widget via SSE
+        viz = vernql_submit_results(query_id, rows, session_id)
+
         return JsonResponse({
-            "success": False,
-            "error": "Invalid JSON in request body"
-        }, status=400)
+            "success":            True,
+            "session_id":         session_id,
+            "sql":                sql,
+            "query_id":           query_id,
+            "chart_type":         viz.get("chart_type"),
+            "ai_insight":         viz.get("ai_insight"),
+            "visualization_data": viz.get("visualization_data"),
+        })
 
-    except Exception as e:
-        return JsonResponse({
-            "success": False,
-            "error": str(e)
-        }, status=500)
+    except NotImplementedError as exc:
+        return JsonResponse({"error": str(exc)}, status=501)
+    except requests.exceptions.HTTPError as exc:
+        return JsonResponse({"error": f"Vernql API error: {exc}"}, status=502)
+    except Exception as exc:
+        return JsonResponse({"error": str(exc)}, status=500)
 
 
 def health_view(request):
-    """Health check endpoint"""
     return JsonResponse({"status": "healthy"})
 
 
-# Example usage in Django management command or view
-def example_usage():
-    """
-    Example of how to use the TextSQL integration
-
-    Run this from Django shell:
-    >>> from yourapp.views import example_usage
-    >>> example_usage()
-    """
-    test_query = "{{ query_example }}"
-    result = generate_sql(test_query)
-
-    if result:
-        print(f"Question: {test_query}")
-        print(f"Generated SQL: {result.get('generated_sql')}")
-        print(f"Confidence: {result.get('confidence_score', 0):.2%}")
-    else:
-        print("Failed to generate SQL")
-
-
-# Add to your urls.py:
+# ── urls.py wiring ────────────────────────────────────────────────────────────
 """
 from django.urls import path
-from . import views
+from yourapp.vernql import query_view, health_view
 
 urlpatterns = [
-    path('api/query/', views.query_view, name='query'),
-    path('api/health/', views.health_view, name='health'),
+    path("api/query/",  query_view,  name="vernql_query"),
+    path("api/health/", health_view, name="vernql_health"),
 ]
 """

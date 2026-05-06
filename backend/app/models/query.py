@@ -9,6 +9,7 @@ from sqlalchemy.sql import func
 import uuid
 import enum
 
+
 from app.db.database import Base
 
 
@@ -48,6 +49,16 @@ class Query(Base):
         nullable=True,
         index=True
     )
+    session_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("sessions.id", ondelete="SET NULL"),
+        nullable=True
+    )
+    turn_number = Column(
+        Integer,
+        nullable=True,
+        comment="Position of this query within its session (1-based)"
+    )
 
     # Query Data
     natural_language_query = Column(Text, nullable=False)
@@ -82,12 +93,15 @@ class Query(Base):
     # Relationships
     company = relationship("Company", back_populates="queries")
     schema = relationship("Schema", back_populates="queries")
+    session = relationship("Session", back_populates="queries")
+    results = relationship("QueryResult", back_populates="query", cascade="all, delete-orphan")
 
     # Composite indexes for analytics
     __table_args__ = (
         Index('ix_queries_company_created', 'company_id', 'created_at'),
         Index('ix_queries_schema_created', 'schema_id', 'created_at'),
         Index('ix_queries_status', 'status'),
+        Index('ix_queries_session_turn', 'session_id', 'turn_number'),
     )
 
     def __repr__(self):

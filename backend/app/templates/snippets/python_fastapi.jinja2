@@ -1,130 +1,204 @@
 """
-TextSQL API Integration - FastAPI Example
-Demonstrates how to integrate TextSQL API into a FastAPI application
+Vernql API Integration — FastAPI
+Complete integration including session management, SQL execution,
+and the result feedback loop that drives widget visualizations.
 """
-import requests
+import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
-app = FastAPI(title="TextSQL Integration API")
+app = FastAPI(title="Vernql Integration API")
 
-# TextSQL API Configuration
-TEXTSQL_API_KEY = "{{ api_key }}"
-TEXTSQL_BASE_URL = "{{ base_url }}"
-SCHEMA_ID = "{{ schema_id }}"
+# ── Configuration ─────────────────────────────────────────────────────────────
+VERNQL_API_KEY  = "{{ api_key }}"
+VERNQL_BASE_URL = "{{ base_url }}"
+SCHEMA_ID       = "{{ schema_id }}"
 
+_HEADERS = {
+    "X-API-Key": VERNQL_API_KEY,
+    "Content-Type": "application/json",
+}
+
+
+# ── Request / Response models ─────────────────────────────────────────────────
 
 class QueryRequest(BaseModel):
-    """Request model for SQL generation"""
-    question: str = Field(..., description="Natural language question", min_length=1)
+    question:   str            = Field(..., description="Natural language question")
+    session_id: Optional[str]  = Field(None, description="Reuse for follow-up questions")
 
 
 class QueryResponse(BaseModel):
-    """Response model for SQL generation"""
-    success: bool
-    sql: Optional[str] = None
-    confidence: Optional[float] = None
-    warnings: List[str] = []
-    error: Optional[str] = None
+    success:            bool
+    session_id:         Optional[str]       = None
+    sql:                Optional[str]       = None
+    query_id:           Optional[str]       = None
+    chart_type:         Optional[str]       = None
+    ai_insight:         Optional[str]       = None
+    visualization_data: Optional[Any]       = None
+    error:              Optional[str]       = None
 
 
-async def generate_sql(natural_language_query: str) -> dict:
+# ── Step 1 · Session ──────────────────────────────────────────────────────────
+
+async def vernql_create_session() -> str:
     """
-    Generate SQL from natural language using TextSQL API
-
-    Args:
-        natural_language_query: Natural language question
-
-    Returns:
-        dict: Response containing generated SQL and metadata
-
-    Raises:
-        HTTPException: If API request fails
+    Create a new conversational session.
+    Returns a session_id that groups queries so the AI keeps context
+    across follow-up questions and pushes results to the widget via SSE.
+    Store this ID (e.g. in a database or Redis) and reuse it per user.
     """
-    url = f"{TEXTSQL_BASE_URL}/{{ api_version }}/queries"
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(
+            f"{VERNQL_BASE_URL}/{{ api_version }}/sessions",
+            json={"schema_id": SCHEMA_ID},
+            headers=_HEADERS,
+        )
+        resp.raise_for_status()
+        return resp.json()["session_id"]
 
-    headers = {
-        "X-API-Key": TEXTSQL_API_KEY,
-        "Content-Type": "application/json"
+
+# ── Step 2 · SQL Generation ───────────────────────────────────────────────────
+
+async def vernql_generate_sql(question: str, session_id: Optional[str] = None) -> dict:
+    """
+    Convert a natural language question to SQL.
+    Pass session_id to maintain multi-turn context across questions.
+    Returns dict with keys: id (query_id), generated_sql, confidence_score, warnings.
+    """
+    payload: Dict[str, Any] = {"schema_id": SCHEMA_ID, "query": question}
+    if session_id:
+        payload["session_id"] = session_id
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{VERNQL_BASE_URL}/{{ api_version }}/queries",
+            json=payload,
+            headers=_HEADERS,
+        )
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail=f"Vernql API error: {resp.text}")
+        return resp.json()
+
+
+# ── Step 3 · Execute on YOUR database ────────────────────────────────────────
+#
+#  TODO: Replace this stub with your real database connection.
+#  Only SELECT queries reach here — Vernql blocks all destructive commands.
+#
+#  Must return a list of row dicts, e.g.:
+#    [{"product": "Widget A", "sales": 1500}, ...]
+#
+#  Example — PostgreSQL with asyncpg:
+#    import asyncpg
+#    pool = await asyncpg.create_pool("postgresql://user:pass@host/db")
+#    async with pool.acquire() as conn:
+#        rows = await conn.fetch(sql)
+#        return [dict(row) for row in rows]
+#
+async def run_on_your_database(sql: str) -> List[Dict[str, Any]]:
+    raise NotImplementedError("Connect run_on_your_database() to your real database.")
+
+
+# ── Step 4 · Submit results for visualization ─────────────────────────────────
+
+async def vernql_submit_results(
+    query_id: str,
+    rows: List[Dict[str, Any]],
+    session_id: Optional[str] = None,
+) -> dict:
+    """
+    Send query results back to Vernql.
+    Vernql auto-detects the best chart type (bar, line, pie, metric, table),
+    generates an AI insight, and — when session_id is present — pushes the
+    visualization to any widget connected to that session via SSE.
+    Returns dict with keys: chart_type, ai_insight, visualization_data.
+    """
+    payload: Dict[str, Any] = {
+        "query_id": query_id,
+        "results": rows,
+        "generate_insight": True,
     }
+    if session_id:
+        payload["session_id"] = session_id
 
-    payload = {
-        "schema_id": SCHEMA_ID,
-        "query": natural_language_query
-    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{VERNQL_BASE_URL}/{{ api_version }}/visualizations/display",
+            json=payload,
+            headers=_HEADERS,
+        )
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail=f"Vernql API error: {resp.text}")
+        return resp.json()
 
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
-        response.raise_for_status()
-        return response.json()
 
-    except requests.exceptions.Timeout:
-        raise HTTPException(status_code=504, detail="TextSQL API request timed out")
-    except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"TextSQL API error: {str(e)}")
-
+# ── Route ─────────────────────────────────────────────────────────────────────
 
 @app.post("/query", response_model=QueryResponse)
-async def query_endpoint(request: QueryRequest):
+async def query_endpoint(body: QueryRequest):
     """
-    Convert natural language to SQL
+    Full Vernql integration — NL → SQL → execute → visualize.
 
-    Example request:
-    ```json
-    {
-        "question": "{{ query_example }}"
-    }
-    ```
+    Pass session_id from a previous response to continue the same conversation.
+    On the first question, omit it and save the returned session_id for follow-ups.
 
-    Returns:
-        QueryResponse: Generated SQL with confidence score
+    Example first question:
+        POST /query
+        { "question": "{{ query_example }}" }
+
+    Example follow-up:
+        POST /query
+        { "question": "Now filter to last 30 days", "session_id": "<from above>" }
     """
+    session_id = body.session_id
+
+    # Create a session on the first turn if the caller didn't supply one
+    if not session_id:
+        try:
+            session_id = await vernql_create_session()
+        except Exception:
+            pass  # widget still works without SSE; continue without session
+
     try:
-        result = await generate_sql(request.question)
+        # Step 2 — Generate SQL
+        query_result = await vernql_generate_sql(body.question, session_id)
+        sql      = query_result["generated_sql"]
+        query_id = query_result["id"]
+
+        # Step 3 — Run the SQL on YOUR database
+        rows = await run_on_your_database(sql)
+
+        # Step 4 — Submit results; Vernql visualizes and pushes to widget via SSE
+        viz = await vernql_submit_results(query_id, rows, session_id)
 
         return QueryResponse(
             success=True,
-            sql=result.get("generated_sql"),
-            confidence=result.get("confidence_score"),
-            warnings=result.get("warnings", [])
+            session_id=session_id,
+            sql=sql,
+            query_id=query_id,
+            chart_type=viz.get("chart_type"),
+            ai_insight=viz.get("ai_insight"),
+            visualization_data=viz.get("visualization_data"),
         )
 
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=501, detail=str(exc))
     except HTTPException:
         raise
-    except Exception as e:
-        return QueryResponse(
-            success=False,
-            error=str(e)
-        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/health")
 async def health():
-    """Health check endpoint"""
-    return {"status": "healthy", "service": "textsql-integration"}
-
-
-@app.get("/")
-async def root():
-    """Root endpoint with API information"""
-    return {
-        "service": "TextSQL Integration API",
-        "endpoints": {
-            "query": "POST /query",
-            "health": "GET /health",
-            "docs": "GET /docs"
-        }
-    }
+    return {"status": "healthy"}
 
 
 if __name__ == "__main__":
     import uvicorn
-
-    print("TextSQL FastAPI Integration Example")
-    print("-" * 50)
-    print("Starting FastAPI server on http://localhost:8000")
-    print("API docs available at http://localhost:8000/docs")
-    print("-" * 50)
-
+    print("Vernql FastAPI Integration")
+    print("-" * 40)
+    print("POST /query — NL → SQL → run → visualize")
+    print("Docs: http://localhost:8000/docs")
     uvicorn.run(app, host="0.0.0.0", port=8000)

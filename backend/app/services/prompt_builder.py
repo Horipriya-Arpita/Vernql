@@ -121,9 +121,18 @@ Your task is to generate a single, valid {db_name} SQL query that accurately ans
     def _build_schema_context(
         self,
         schema: Schema,
-        include_descriptions: bool = True
+        include_descriptions: bool = True,
+        max_cols_per_table: Optional[int] = None,
     ) -> str:
-        """Part 2: Build enriched schema context"""
+        """Part 2: Build enriched schema context.
+
+        Args:
+            schema: Schema ORM object with tables and columns
+            include_descriptions: Include AI-generated / user-edited descriptions
+            max_cols_per_table: When set, keep only the top-N most important
+                columns per table (PKs first, then FKs, then NOT NULL, then
+                nullable). A truncation notice is appended for omitted columns.
+        """
         context_parts = []
 
         context_parts.append("# DATABASE SCHEMA")
@@ -135,22 +144,78 @@ Your task is to generate a single, valid {db_name} SQL query that accurately ans
 
         context_parts.append("\n## Tables and Columns:\n")
 
-        # Build table information
         for table in schema.tables:
-            # Table header
+            # Table header with optional description
             table_header = f"### {table.name}"
             if include_descriptions and table.enriched_description:
                 table_header += f"\n{table.enriched_description}"
             context_parts.append(table_header)
 
-            # Columns
+            # Select which columns to include
+            cols = list(table.columns)
+            skipped = 0
+            if max_cols_per_table is not None and len(cols) > max_cols_per_table:
+                cols = sorted(cols, key=self._column_priority)[:max_cols_per_table]
+                skipped = len(table.columns) - max_cols_per_table
+
             context_parts.append("```")
-            for col in table.columns:
-                col_line = self._format_column(col, include_descriptions)
-                context_parts.append(col_line)
+            for col in cols:
+                context_parts.append(self._format_column(col, include_descriptions))
+            if skipped:
+                context_parts.append(f"-- ... {skipped} additional column(s) omitted")
             context_parts.append("```\n")
 
+        # FK relationship map for JOIN planning
+        rel_section = self._build_relationships_section(schema)
+        if rel_section:
+            context_parts.append(rel_section)
+
         return "\n".join(context_parts)
+
+    def _build_relationships_section(self, schema: Schema) -> str:
+        """
+        Build a consolidated FK → reference map for JOIN planning.
+
+        Listing all foreign keys together in one section lets the AI plan JOIN
+        chains without having to re-scan individual column annotations. For a
+        multi-table query the AI can see the full graph at a glance.
+
+        Example output:
+            ## Join Relationships:
+              orders.customer_id → customers.id
+              order_items.order_id → orders.id
+              order_items.product_id → products.id
+              products.category_id → categories.id
+
+        Returns an empty string when the schema has no foreign keys.
+        """
+        lines: List[str] = []
+        for table in schema.tables:
+            for col in table.columns:
+                if col.is_foreign_key and col.foreign_key_table:
+                    ref_col = col.foreign_key_column or "id"
+                    lines.append(
+                        f"  {table.name}.{col.name} → {col.foreign_key_table}.{ref_col}"
+                    )
+
+        if not lines:
+            return ""
+
+        return "## Join Relationships:\n" + "\n".join(lines)
+
+    @staticmethod
+    def _column_priority(col) -> int:
+        """Sort key for column importance — lower = keep first when truncating.
+
+        Order: primary keys → foreign keys → required (NOT NULL) → nullable.
+        """
+        if col.is_primary_key:
+            return 0
+        if col.is_foreign_key:
+            return 1
+        if not col.is_nullable:
+            return 2
+        return 3
 
     def _format_column(self, column, include_descriptions: bool = True) -> str:
         """Format a single column with metadata"""
@@ -220,23 +285,25 @@ Your task is to generate a single, valid {db_name} SQL query that accurately ans
 - ❌ No DROP, DELETE, TRUNCATE, ALTER, CREATE, INSERT, UPDATE
 - ❌ No EXEC, EXECUTE, or dynamic SQL
 - ❌ No comments (-- or /* */)
-- ❌ No multiple statements (;)
-- ❌ No subqueries unless absolutely necessary
+- ❌ No multiple statements separated by ;
 
 ## Best Practices:
 - ✅ Select specific columns instead of SELECT *
 - ✅ Use meaningful aliases for readability
-- ✅ Optimize JOINs (use appropriate type)
-- ✅ Add indexes hints if available
-- ✅ Handle NULL values appropriately"""
+- ✅ Optimize JOINs (use appropriate JOIN type)
+- ✅ Handle NULL values appropriately
+- ✅ Use CTEs (WITH clauses) for multi-step logic — clearer than deeply nested subqueries
+- ✅ Subqueries in WHERE / FROM are fine when they simplify the query"""
 
         # Add database-specific rules
         if self.db_type == "postgresql":
             rules += """
 
 ## PostgreSQL Specifics:
+- **CRITICAL: Always wrap every table name and column name in double quotes** to preserve exact case (e.g., SELECT "id", "createdAt", "shopId" FROM "User" — never SELECT id, createdAt FROM User)
+- This is required because Prisma/ORM schemas use PascalCase tables and camelCase columns; unquoted identifiers are folded to lowercase by PostgreSQL and will cause "column does not exist" or "relation does not exist" errors
 - Use ILIKE for case-insensitive string matching
-- Use :: for type casting (e.g., column::DATE)
+- Use :: for type casting (e.g., "column"::DATE)
 - Use EXTRACT() for date parts
 - String concatenation with ||"""
 
@@ -302,46 +369,107 @@ SQL:"""
         # Rough estimate: ~4 characters per token
         return len(prompt) // 4
 
+    def _build_truncated_prompt(
+        self,
+        schema: Schema,
+        natural_language_query: str,
+        max_cols_per_table: int,
+        include_descriptions: bool,
+    ) -> str:
+        """Build a prompt with columns truncated to the top-N most important
+        per table (no examples included — examples were already dropped at an
+        earlier fallback level).
+        """
+        parts = [
+            self._build_role_context(),
+            self._build_schema_context(
+                schema,
+                include_descriptions=include_descriptions,
+                max_cols_per_table=max_cols_per_table,
+            ),
+            self._build_rules_and_constraints(),
+            self._build_query_input(natural_language_query),
+        ]
+        return "\n\n".join(parts)
+
     def optimize_prompt_length(
         self,
         schema: Schema,
         natural_language_query: str,
-        max_tokens: int = 4000
+        max_tokens: int = 4000,
+        examples: Optional[List[Example]] = None,
     ) -> str:
         """
-        Build prompt optimized for token limit
+        Build the best possible prompt within the token budget.
+
+        Degradation order (quality → compactness):
+
+        1. Full context  — descriptions + few-shot examples  (best accuracy)
+        2. No examples   — descriptions kept                  (descriptions > examples)
+        3. Trunc cols    — top-10 columns/table + descriptions
+        4. Trunc cols    — top-10 columns/table, no descriptions
+        5. Minimal       — table names and column types only   (last resort)
 
         Args:
-            schema: Schema object
-            natural_language_query: User query
-            max_tokens: Maximum token limit
+            schema: Schema ORM object
+            natural_language_query: User's question
+            max_tokens: Hard token budget (estimate, ~4 chars/token)
+            examples: Optional few-shot examples
 
         Returns:
-            Optimized prompt
+            The longest prompt that fits within max_tokens.
         """
-        # Try full prompt first
-        full_prompt = self.build_sql_generation_prompt(
+        def fits(prompt: str) -> bool:
+            return self.estimate_token_count(prompt) <= max_tokens
+
+        # Level 1 — full context
+        prompt = self.build_sql_generation_prompt(
             schema=schema,
             natural_language_query=natural_language_query,
-            include_schema_descriptions=True
+            examples=examples,
+            include_schema_descriptions=True,
         )
+        if fits(prompt):
+            return prompt
 
-        if self.estimate_token_count(full_prompt) <= max_tokens:
-            return full_prompt
-
-        # If too long, try without descriptions
-        self.logger.info("Prompt too long, removing descriptions")
-        no_desc_prompt = self.build_sql_generation_prompt(
+        # Level 2 — drop examples, keep descriptions
+        # Descriptions carry more SQL-generation signal than few-shot examples.
+        self.logger.info(
+            "Prompt over budget — dropping examples, keeping descriptions",
+            budget=max_tokens,
+            actual=self.estimate_token_count(prompt),
+        )
+        prompt = self.build_sql_generation_prompt(
             schema=schema,
             natural_language_query=natural_language_query,
-            include_schema_descriptions=False
+            examples=None,
+            include_schema_descriptions=True,
         )
+        if fits(prompt):
+            return prompt
 
-        if self.estimate_token_count(no_desc_prompt) <= max_tokens:
-            return no_desc_prompt
+        # Level 3 — truncate columns (top 10 by importance), keep descriptions
+        self.logger.info("Still over budget — truncating columns, keeping descriptions")
+        prompt = self._build_truncated_prompt(
+            schema, natural_language_query,
+            max_cols_per_table=10,
+            include_descriptions=True,
+        )
+        if fits(prompt):
+            return prompt
 
-        # If still too long, use minimal context
-        self.logger.warning("Prompt still too long, using minimal context")
+        # Level 4 — truncate columns (top 10), drop descriptions
+        self.logger.info("Still over budget — truncating columns, dropping descriptions")
+        prompt = self._build_truncated_prompt(
+            schema, natural_language_query,
+            max_cols_per_table=10,
+            include_descriptions=False,
+        )
+        if fits(prompt):
+            return prompt
+
+        # Level 5 — minimal context (last resort)
+        self.logger.warning("Prompt still over budget — using minimal context")
         return self._build_minimal_prompt(schema, natural_language_query)
 
     def _build_minimal_prompt(self, schema: Schema, query: str) -> str:

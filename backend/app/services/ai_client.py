@@ -220,6 +220,47 @@ class AIClient:
 
         return status
 
+    async def generate_insight(self, prompt: str) -> str:
+        """
+        Generate a concise AI insight from a prompt
+
+        Args:
+            prompt: The prompt describing the data and request
+
+        Returns:
+            A single-line insight string
+
+        Raises:
+            Exception: If generation fails
+        """
+        try:
+            system_prompt = (
+                "You are a data analyst providing concise business insights. "
+                "Generate a single sentence (max 100 characters) summarizing the key insight. "
+                "Focus on business meaning, not technical details. "
+                "Be specific and use numbers when available."
+            )
+
+            insight = self.generate_completion(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.3,  # Lower temperature for consistency
+                max_tokens=50
+            )
+
+            # Clean up the response (remove quotes, extra whitespace)
+            insight = insight.strip().strip('"\'')
+
+            # Truncate if too long
+            if len(insight) > 150:
+                insight = insight[:147] + "..."
+
+            return insight
+
+        except Exception as e:
+            logger.error("Failed to generate insight", error=str(e))
+            raise
+
 
 # Global AI client instance
 ai_client = AIClient()

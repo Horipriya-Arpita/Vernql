@@ -18,7 +18,12 @@ class Settings(BaseSettings):
 
     # API
     API_V1_PREFIX: str = "/v1"
-    ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8000"]
+    ALLOWED_ORIGINS: List[str] = [
+        "http://localhost:3002",
+        "http://127.0.0.1:3002",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
 
     # Database
     DATABASE_URL: str = "postgresql://textsql:textsql@localhost:5432/textsql"
@@ -33,6 +38,11 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "your-secret-key-change-this-in-production"
     API_KEY_PREFIX: str = "textsql_"
     API_KEY_LENGTH: int = 32
+
+    # JWT Configuration
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60  # 1 hour
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 30  # 30 days
+    JWT_ALGORITHM: str = "HS256"
 
     # Rate Limiting
     RATE_LIMIT_ENABLED: bool = True

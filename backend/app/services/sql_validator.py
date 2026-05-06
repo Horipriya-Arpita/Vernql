@@ -60,20 +60,40 @@ class SQLValidator:
     }
 
     # Suspicious patterns that might indicate SQL injection
+    # Note: comment patterns are intentionally absent — comments are stripped
+    # before these checks run, so they can never appear here. Keeping them
+    # would cause every legitimate SQL comment to be flagged as injection.
     INJECTION_PATTERNS = [
-        r';\s*DROP',  # Statement chaining
-        r'--',  # SQL comments
-        r'/\*.*\*/',  # Block comments
-        r'UNION\s+SELECT',  # Union-based injection
-        r'OR\s+1\s*=\s*1',  # Always-true conditions
+        r';\s*DROP',              # Statement chaining
+        r'UNION\s+SELECT',        # Union-based injection
+        r'OR\s+1\s*=\s*1',        # Always-true conditions
         r'OR\s+\'1\'\s*=\s*\'1\'',
-        r'SLEEP\s*\(',  # Time-based injection
+        r'SLEEP\s*\(',            # Time-based injection
         r'BENCHMARK\s*\(',
         r'WAITFOR\s+DELAY',
     ]
 
     def __init__(self):
         self.logger = logger.bind(service="sql_validator")
+
+    def _strip_comments(self, sql: str) -> str:
+        """Remove SQL comments, replacing each with a space to preserve token boundaries.
+
+        This must run before all security checks so that patterns like
+        ``SELECT * -- DROP TABLE users`` or ``SELECT * /* DROP */ FROM t``
+        cannot hide forbidden keywords inside comments.
+        """
+        result = []
+        for statement in sqlparse.parse(sql):
+            for token in statement.flatten():
+                if token.ttype in (
+                    sqlparse.tokens.Comment.Single,
+                    sqlparse.tokens.Comment.Multiline,
+                ):
+                    result.append(' ')
+                else:
+                    result.append(token.value)
+        return ''.join(result)
 
     def validate(
         self,
@@ -112,16 +132,21 @@ class SQLValidator:
             ))
             return warnings
 
-        # Run all validation checks
-        warnings.extend(self._check_forbidden_keywords(sql))
-        warnings.extend(self._check_injection_patterns(sql))
-        warnings.extend(self._check_limit_clause(sql, db_type))
+        # Strip comments before any security check so hidden keywords can't bypass detection.
+        # e.g.  SELECT * -- DROP TABLE users
+        #        SELECT * /* ALTER TABLE t ... */ FROM t
+        clean_sql = self._strip_comments(sql)
+
+        # Run all validation checks on comment-free SQL
+        warnings.extend(self._check_forbidden_keywords(clean_sql))
+        warnings.extend(self._check_injection_patterns(clean_sql))
+        warnings.extend(self._check_limit_clause(clean_sql, db_type))
 
         if schema:
-            warnings.extend(self._check_table_references(sql, schema))
-            warnings.extend(self._check_column_references(sql, schema))
+            warnings.extend(self._check_table_references(clean_sql, schema))
+            warnings.extend(self._check_column_references(clean_sql, schema))
 
-        warnings.extend(self._check_best_practices(sql, parsed[0] if parsed else None))
+        warnings.extend(self._check_best_practices(clean_sql, parsed[0] if parsed else None))
 
         # Log validation results
         if warnings:
@@ -213,28 +238,43 @@ class SQLValidator:
         """Validate that referenced tables exist in schema"""
         warnings = []
 
-        # Get all table names from schema
         valid_tables = {table.name.lower() for table in schema.tables}
-
-        # Extract table references from SQL (basic pattern matching)
-        # This is a simplified approach - a full parser would be more accurate
         sql_lower = sql.lower()
 
-        # Pattern: FROM table_name or JOIN table_name
+        # Collect CTE names so they are not flagged as unknown tables.
+        # Handles: WITH name AS (...) and the comma-separated continuations
+        # WITH a AS (...), b AS (...)
+        cte_names: set = set(re.findall(
+            r'\bwith\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+as\s*\(', sql_lower
+        ))
+        cte_names.update(re.findall(
+            r',\s*([a-zA-Z_][a-zA-Z0-9_]*)\s+as\s*\(', sql_lower
+        ))
+
+        # Match FROM/JOIN with an optional schema qualifier.
+        # The non-capturing group (?:schema.) is consumed but only the table
+        # name after the dot (or the bare name when no dot is present) is captured.
+        # Examples that now work correctly:
+        #   FROM users           -> "users"
+        #   FROM public.users    -> "users"   (was "public" before)
+        #   FROM users u         -> "users"   (alias ignored, unchanged)
+        #   FROM (SELECT ...)    -> no match  (( is not [a-zA-Z_])
         table_patterns = [
-            r'\bfrom\s+([a-zA-Z_][a-zA-Z0-9_]*)',
-            r'\bjoin\s+([a-zA-Z_][a-zA-Z0-9_]*)',
+            r'\bfrom\s+(?:[a-zA-Z_][a-zA-Z0-9_]*\.)?([a-zA-Z_][a-zA-Z0-9_]*)',
+            r'\bjoin\s+(?:[a-zA-Z_][a-zA-Z0-9_]*\.)?([a-zA-Z_][a-zA-Z0-9_]*)',
         ]
 
-        referenced_tables = set()
+        referenced_tables: set = set()
         for pattern in table_patterns:
-            matches = re.finditer(pattern, sql_lower)
-            for match in matches:
-                table_name = match.group(1).lower()
-                referenced_tables.add(table_name)
+            for match in re.finditer(pattern, sql_lower):
+                referenced_tables.add(match.group(1).lower())
 
-        # Check if referenced tables exist
+        # Skip names that are CTEs or SQL keywords that can follow FROM/JOIN
+        skip = cte_names | {'select', 'lateral'}
+
         for table_name in referenced_tables:
+            if table_name in skip:
+                continue
             if table_name not in valid_tables:
                 warnings.append(ValidationWarning(
                     severity="warning",
@@ -245,52 +285,106 @@ class SQLValidator:
 
         return warnings
 
+    # SQL keywords and built-in functions that are never column names.
+    # This list is used by _check_column_references to reduce false positives.
+    _COLUMN_CHECK_SKIP_WORDS: Set[str] = {
+        # Structural keywords
+        'select', 'from', 'where', 'join', 'inner', 'left', 'right', 'full',
+        'outer', 'cross', 'on', 'and', 'or', 'not', 'in', 'between', 'like',
+        'ilike', 'is', 'null', 'true', 'false', 'as', 'by', 'order', 'group',
+        'having', 'limit', 'offset', 'union', 'all', 'distinct', 'case', 'when',
+        'then', 'else', 'end', 'asc', 'desc', 'with', 'over', 'partition',
+        'rows', 'range', 'unbounded', 'preceding', 'following', 'current', 'row',
+        'exists', 'any', 'some', 'lateral', 'filter', 'within', 'interval',
+        'recursive', 'window', 'returning', 'using', 'natural', 'values', 'set',
+        # Aggregates and window functions
+        'count', 'sum', 'avg', 'min', 'max', 'stddev', 'variance',
+        'first_value', 'last_value', 'nth_value', 'lead', 'lag',
+        'rank', 'dense_rank', 'row_number', 'ntile', 'percent_rank', 'cume_dist',
+        'string_agg', 'array_agg', 'json_agg', 'jsonb_agg', 'bit_and', 'bit_or',
+        # String functions
+        'lower', 'upper', 'length', 'char_length', 'trim', 'ltrim', 'rtrim',
+        'substr', 'substring', 'replace', 'concat', 'coalesce', 'nullif',
+        'split_part', 'regexp_replace', 'to_char', 'initcap', 'lpad', 'rpad',
+        'reverse', 'repeat', 'position', 'strpos', 'overlay', 'format',
+        # Numeric / math
+        'abs', 'ceil', 'ceiling', 'floor', 'round', 'trunc', 'mod', 'power',
+        'sqrt', 'exp', 'ln', 'log', 'sign', 'random', 'greatest', 'least',
+        # Date / time
+        'now', 'current_date', 'current_time', 'current_timestamp', 'localtime',
+        'localtimestamp', 'date', 'time', 'timestamp', 'extract', 'date_part',
+        'date_trunc', 'age', 'to_timestamp', 'to_date', 'make_date', 'year',
+        'month', 'day', 'hour', 'minute', 'second', 'epoch',
+        # Type names / CAST targets
+        'cast', 'convert', 'int', 'integer', 'bigint', 'smallint', 'float',
+        'double', 'numeric', 'decimal', 'boolean', 'text', 'varchar', 'char',
+        'bytea', 'uuid', 'json', 'jsonb', 'array', 'precision', 'value',
+        # Conditional helpers
+        'if', 'ifnull', 'isnull', 'nvl', 'decode', 'iif',
+    }
+
     def _check_column_references(
         self,
         sql: str,
         schema: Schema
     ) -> List[ValidationWarning]:
-        """Validate that referenced columns exist (basic check)"""
+        """Check column names across all clauses (SELECT, WHERE, ON, GROUP BY, ORDER BY).
+
+        Warnings are severity "info" because regex-based extraction is inherently
+        heuristic and can produce false positives on complex expressions.
+        """
         warnings = []
 
-        # Build a set of all valid column names across all tables
-        # Note: This is a simplified check - ideally we'd validate columns per table
+        # Build pool of valid column names (union across all tables)
         valid_columns = set()
         for table in schema.tables:
             for column in table.columns:
                 valid_columns.add(column.name.lower())
 
-        # Extract potential column names from SELECT clause
-        # Pattern: SELECT col1, col2, ... FROM
-        select_match = re.search(
-            r'select\s+(.*?)\s+from',
-            sql,
-            re.IGNORECASE | re.DOTALL
+        if not valid_columns:
+            return warnings
+
+        sql_lower = sql.lower()
+
+        # Table names are identifiers but not column references
+        table_names = {table.name.lower() for table in schema.tables}
+
+        # CTE names defined in this query are not column references
+        cte_names: Set[str] = set(re.findall(
+            r'\bwith\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+as\s*\(', sql_lower
+        ))
+        cte_names.update(re.findall(
+            r',\s*([a-zA-Z_][a-zA-Z0-9_]*)\s+as\s*\(', sql_lower
+        ))
+
+        # Column/table aliases introduced with AS are not column references
+        alias_names: Set[str] = set(re.findall(
+            r'\bas\s+([a-zA-Z_][a-zA-Z0-9_]*)\b', sql_lower
+        ))
+
+        skip = self._COLUMN_CHECK_SKIP_WORDS | table_names | cte_names | alias_names
+
+        # Strip table/alias qualifiers so "u.user_id" becomes "user_id"
+        # and "u" is no longer treated as a candidate column name.
+        clean = re.sub(
+            r'\b[a-zA-Z_][a-zA-Z0-9_]*\.([a-zA-Z_][a-zA-Z0-9_]*)\b',
+            r'\1',
+            sql_lower,
         )
 
-        if select_match and select_match.group(1).strip() != '*':
-            columns_str = select_match.group(1)
+        # Extract every identifier token from the full SQL (covers SELECT, WHERE,
+        # ON, GROUP BY, ORDER BY, HAVING — not just the SELECT list).
+        all_identifiers = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', clean)
+        candidates = {name for name in all_identifiers if name not in skip}
 
-            # Parse column names (basic - doesn't handle complex expressions)
-            columns = re.findall(
-                r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b',
-                columns_str
-            )
-
-            for col in columns:
-                col_lower = col.lower()
-                # Skip SQL keywords and functions
-                if col_lower not in {
-                    'count', 'sum', 'avg', 'min', 'max',
-                    'distinct', 'as', 'case', 'when', 'then', 'else', 'end'
-                } and col_lower not in valid_columns:
-                    # This is a soft warning since our parsing is basic
-                    warnings.append(ValidationWarning(
-                        severity="info",
-                        message=f"Column '{col}' may not exist in schema",
-                        code="UNKNOWN_COLUMN",
-                        suggestion="Verify column name is correct"
-                    ))
+        for col in sorted(candidates):
+            if col not in valid_columns:
+                warnings.append(ValidationWarning(
+                    severity="info",
+                    message=f"Column '{col}' may not exist in schema",
+                    code="UNKNOWN_COLUMN",
+                    suggestion="Verify column name is correct",
+                ))
 
         return warnings
 

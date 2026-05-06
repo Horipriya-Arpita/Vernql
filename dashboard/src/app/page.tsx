@@ -33,18 +33,24 @@ export default function Home() {
           </div>
 
           {/* CTA */}
-          <div className="space-x-4">
+          <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
             <Link
-              href="/dashboard"
-              className="inline-block px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
+              href="/signup"
+              className="inline-block px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium shadow-lg hover:shadow-xl"
             >
-              Go to Dashboard
+              Get Started Free
             </Link>
             <Link
-              href="/docs"
-              className="inline-block px-8 py-3 bg-white text-blue-600 rounded-lg hover:bg-gray-50 transition-colors font-medium border border-blue-200"
+              href="/login"
+              className="inline-block px-8 py-3 bg-white text-blue-600 rounded-lg hover:bg-gray-50 transition-colors font-medium border-2 border-blue-600"
             >
-              View Documentation
+              Sign In
+            </Link>
+            <Link
+              href="/demo"
+              className="inline-block px-8 py-3 text-gray-600 hover:text-gray-900 transition-colors font-medium underline"
+            >
+              View Demo & Docs
             </Link>
           </div>
 

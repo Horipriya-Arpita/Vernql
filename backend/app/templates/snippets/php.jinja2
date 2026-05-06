@@ -1,186 +1,234 @@
 <?php
 /**
- * TextSQL API Integration - PHP Example
- * Demonstrates how to integrate TextSQL API into a PHP application
+ * Vernql API Integration — PHP
+ * Complete integration including session management, SQL execution,
+ * and the result feedback loop that drives widget visualizations.
+ *
+ * Requires: PHP curl extension (php-curl)
  */
 
-// TextSQL API Configuration
-define('TEXTSQL_API_KEY', '{{ api_key }}');
-define('TEXTSQL_BASE_URL', '{{ base_url }}');
-define('SCHEMA_ID', '{{ schema_id }}');
+// ── Configuration ─────────────────────────────────────────────────────────────
+define('VERNQL_API_KEY',  '{{ api_key }}');
+define('VERNQL_BASE_URL', '{{ base_url }}');
+define('SCHEMA_ID',       '{{ schema_id }}');
+
+
+// ── HTTP helper ───────────────────────────────────────────────────────────────
 
 /**
- * Generate SQL from natural language using TextSQL API
- *
- * @param string $naturalLanguageQuery Natural language question
- * @return array|null Response containing generated SQL and metadata, or null on error
+ * Make a JSON POST request to the Vernql API.
+ * Returns decoded response array on success, throws on HTTP error.
  */
-function generateSQL($naturalLanguageQuery) {
-    $url = TEXTSQL_BASE_URL . '/{{ api_version }}/queries';
+function vernql_post(string $path, array $payload): array {
+    $url  = VERNQL_BASE_URL . $path;
+    $body = json_encode($payload);
 
-    $headers = [
-        'X-API-Key: ' . TEXTSQL_API_KEY,
-        'Content-Type: application/json'
-    ];
-
-    $payload = json_encode([
-        'schema_id' => SCHEMA_ID,
-        'query' => $naturalLanguageQuery
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => $body,
+        CURLOPT_HTTPHEADER     => [
+            'X-API-Key: '    . VERNQL_API_KEY,
+            'Content-Type: application/json',
+            'Content-Length: ' . strlen($body),
+        ],
+        CURLOPT_TIMEOUT        => 30,
     ]);
 
-    // Initialize cURL
-    $ch = curl_init($url);
-
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
-
-    // Execute request
     $response = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $error = curl_error($ch);
-
+    $error    = curl_error($ch);
     curl_close($ch);
 
-    // Handle errors
     if ($error) {
-        error_log("TextSQL API request failed: $error");
-        return null;
+        throw new RuntimeException("cURL error: $error");
     }
-
     if ($httpCode >= 400) {
-        error_log("TextSQL API returned error: HTTP $httpCode");
-        return null;
+        throw new RuntimeException("Vernql API error HTTP $httpCode: $response");
     }
 
-    // Parse and return response
     return json_decode($response, true);
 }
 
+
+// ── Step 1 · Session ──────────────────────────────────────────────────────────
+
 /**
- * Handle query endpoint
- * POST /query
+ * Create a new conversational session.
+ * Returns a session_id that groups queries so the AI keeps context
+ * across follow-up questions and pushes results to the widget via SSE.
+ * Store this ID (e.g. in $_SESSION or your database) per user.
+ */
+function vernql_create_session(): string {
+    $data = vernql_post('/{{ api_version }}/sessions', ['schema_id' => SCHEMA_ID]);
+    return $data['session_id'];
+}
+
+
+// ── Step 2 · SQL Generation ───────────────────────────────────────────────────
+
+/**
+ * Convert a natural language question to SQL.
+ * Pass $sessionId to maintain multi-turn context across questions.
+ * Returns array with keys: id, generated_sql, confidence_score, warnings.
+ */
+function vernql_generate_sql(string $question, ?string $sessionId = null): array {
+    $payload = ['schema_id' => SCHEMA_ID, 'query' => $question];
+    if ($sessionId) {
+        $payload['session_id'] = $sessionId;
+    }
+    return vernql_post('/{{ api_version }}/queries', $payload);
+}
+
+
+// ── Step 3 · Execute on YOUR database ────────────────────────────────────────
+//
+//  TODO: Replace this stub with your real database connection.
+//  Only SELECT queries reach here — Vernql blocks all destructive commands.
+//
+//  Must return an array of associative row arrays, e.g.:
+//    [['product' => 'Widget A', 'sales' => 1500], ...]
+//
+//  Example — PostgreSQL with PDO:
+//    function run_on_your_database(string $sql): array {
+//        $pdo  = new PDO('pgsql:host=host;dbname=db', 'user', 'pass');
+//        $stmt = $pdo->query($sql);
+//        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+//    }
+//
+function run_on_your_database(string $sql): array {
+    throw new RuntimeException('Connect run_on_your_database() to your real database.');
+}
+
+
+// ── Step 4 · Submit results for visualization ─────────────────────────────────
+
+/**
+ * Send query results back to Vernql.
+ * Vernql auto-detects the best chart type (bar, line, pie, metric, table),
+ * generates an AI insight, and — when session_id is present — pushes the
+ * visualization to any widget connected to that session via SSE.
+ * Returns array with keys: chart_type, ai_insight, visualization_data.
+ */
+function vernql_submit_results(string $queryId, array $rows, ?string $sessionId = null): array {
+    $payload = [
+        'query_id'         => $queryId,
+        'results'          => $rows,
+        'generate_insight' => true,
+    ];
+    if ($sessionId) {
+        $payload['session_id'] = $sessionId;
+    }
+    return vernql_post('/{{ api_version }}/visualizations/display', $payload);
+}
+
+
+// ── Request handler ───────────────────────────────────────────────────────────
+
+/**
+ * Full Vernql integration — NL → SQL → execute → visualize.
  *
- * Example request:
  * POST /query.php
  * Content-Type: application/json
  * {
- *     "question": "{{ query_example }}"
+ *   "question":   "{{ query_example }}",
+ *   "session_id": "<optional — reuse for follow-up questions>"
+ * }
+ *
+ * Response:
+ * {
+ *   "session_id":         "...",   // save and send back for follow-ups
+ *   "sql":                "SELECT ...",
+ *   "chart_type":         "bar",
+ *   "ai_insight":         "...",
+ *   "visualization_data": { ... }
  * }
  */
-function handleQueryRequest() {
-    // Set response header
+function handle_query_request(): void {
     header('Content-Type: application/json');
 
-    // Only allow POST requests
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
         http_response_code(405);
-        echo json_encode([
-            'success' => false,
-            'error' => 'Method not allowed. Use POST.'
-        ]);
+        echo json_encode(['error' => 'Use POST']);
         return;
     }
 
-    // Parse request body
     $input = file_get_contents('php://input');
-    $data = json_decode($input, true);
+    $data  = json_decode($input, true);
 
-    if (json_last_error() !== JSON_ERROR_NONE) {
+    if (json_last_error() !== JSON_ERROR_NONE || empty($data['question'])) {
         http_response_code(400);
-        echo json_encode([
-            'success' => false,
-            'error' => 'Invalid JSON in request body'
-        ]);
+        echo json_encode(['error' => "Missing 'question'"]);
         return;
     }
 
-    // Validate question parameter
-    if (!isset($data['question']) || empty($data['question'])) {
-        http_response_code(400);
-        echo json_encode([
-            'success' => false,
-            'error' => "Missing 'question' in request body"
-        ]);
-        return;
+    $question  = trim($data['question']);
+    $sessionId = $data['session_id'] ?? null;
+
+    // Create a session on the first turn if the caller didn't supply one
+    if (!$sessionId) {
+        try {
+            $sessionId = vernql_create_session();
+        } catch (Exception $e) {
+            error_log('[Vernql] Could not create session: ' . $e->getMessage());
+            // widget still works without SSE; continue without session
+        }
     }
 
-    $question = $data['question'];
+    try {
+        // Step 2 — Generate SQL
+        $queryResult = vernql_generate_sql($question, $sessionId);
+        $sql         = $queryResult['generated_sql'];
+        $queryId     = $queryResult['id'];
 
-    // Generate SQL using TextSQL API
-    $result = generateSQL($question);
+        // Step 3 — Run the SQL on YOUR database
+        $rows = run_on_your_database($sql);
 
-    if ($result) {
+        // Step 4 — Submit results; Vernql visualizes and pushes to widget via SSE
+        $viz = vernql_submit_results($queryId, $rows, $sessionId);
+
         echo json_encode([
-            'success' => true,
-            'sql' => $result['generated_sql'] ?? null,
-            'confidence' => $result['confidence_score'] ?? 0.0,
-            'warnings' => $result['warnings'] ?? []
+            'success'            => true,
+            'session_id'         => $sessionId,
+            'sql'                => $sql,
+            'query_id'           => $queryId,
+            'chart_type'         => $viz['chart_type']         ?? null,
+            'ai_insight'         => $viz['ai_insight']         ?? null,
+            'visualization_data' => $viz['visualization_data'] ?? null,
         ]);
-    } else {
+
+    } catch (RuntimeException $e) {
+        $code = str_starts_with($e->getMessage(), 'Connect') ? 501 : 502;
+        http_response_code($code);
+        echo json_encode(['error' => $e->getMessage()]);
+    } catch (Exception $e) {
         http_response_code(500);
-        echo json_encode([
-            'success' => false,
-            'error' => 'Failed to generate SQL'
-        ]);
+        echo json_encode(['error' => $e->getMessage()]);
     }
 }
 
-/**
- * Health check endpoint
- */
-function handleHealthCheck() {
-    header('Content-Type: application/json');
-    echo json_encode(['status' => 'healthy']);
-}
+// ── Router ────────────────────────────────────────────────────────────────────
 
-// Route handling
-$requestUri = $_SERVER['REQUEST_URI'];
-$requestPath = parse_url($requestUri, PHP_URL_PATH);
+$path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 
-switch ($requestPath) {
+switch (rtrim($path, '/')) {
     case '/query':
     case '/query.php':
-        handleQueryRequest();
+        handle_query_request();
         break;
 
     case '/health':
     case '/health.php':
-        handleHealthCheck();
+        header('Content-Type: application/json');
+        echo json_encode(['status' => 'healthy']);
         break;
 
     default:
-        // Default route - API information
         header('Content-Type: application/json');
         echo json_encode([
-            'service' => 'TextSQL Integration API',
-            'endpoints' => [
-                'query' => 'POST /query',
-                'health' => 'GET /health'
-            ]
+            'service'   => 'Vernql Integration API',
+            'endpoints' => ['POST /query', 'GET /health'],
         ]);
-        break;
 }
-
-// Example usage (uncomment to test)
-/*
-echo "TextSQL PHP Integration Example\n";
-echo str_repeat('-', 50) . "\n";
-
-$testQuery = '{{ query_example }}';
-$result = generateSQL($testQuery);
-
-if ($result) {
-    echo "Question: $testQuery\n";
-    echo "Generated SQL: " . ($result['generated_sql'] ?? 'N/A') . "\n";
-    $confidence = ($result['confidence_score'] ?? 0) * 100;
-    echo "Confidence: " . number_format($confidence, 1) . "%\n";
-} else {
-    echo "Failed to generate SQL\n";
-}
-
-echo str_repeat('-', 50) . "\n";
-*/
 ?>

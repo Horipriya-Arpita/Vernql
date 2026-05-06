@@ -3,43 +3,101 @@ Schema Management Endpoints
 """
 from typing import List, Optional
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.db.database import get_db
-from app.core.dependencies import CurrentCompany
+from app.db.database import SessionLocal, get_db
+from app.core.dependencies import CurrentCompany, CurrentCompanyEither
 from app.services.schema_service import SchemaService
 from app.services.enrichment_service import EnrichmentService
-from app.models import Schema
+from app.models import Schema, SchemaTable, SchemaColumn
 
 router = APIRouter(prefix="/schemas", tags=["Schemas"])
+
+_log = __import__("structlog").get_logger()
+
+
+async def _enrich_in_background(schema_id: str) -> None:
+    """
+    Background task: enrich a schema with AI descriptions using its own DB session.
+
+    Runs after the upload response is already sent so the user is never blocked.
+    Sets enrichment_status to 'running' → 'complete' or 'failed' so the UI
+    can surface the result instead of spinning indefinitely.
+    """
+    db = SessionLocal()
+    try:
+        # Mark as running so the UI knows enrichment has started
+        schema = db.query(Schema).filter(Schema.id == schema_id).first()
+        if schema:
+            schema.enrichment_status = 'running'
+            schema.enrichment_error = None
+            db.commit()
+
+        enrichment_service = EnrichmentService()
+        await enrichment_service.enrich_schema(db=db, schema_id=schema_id)
+
+        # Mark complete (enrichment_service already committed enriched_at)
+        schema = db.query(Schema).filter(Schema.id == schema_id).first()
+        if schema:
+            schema.enrichment_status = 'complete'
+            db.commit()
+
+        _log.info("Background enrichment complete", schema_id=schema_id)
+    except Exception as exc:
+        _log.error("Background enrichment failed", schema_id=schema_id, error=str(exc))
+        try:
+            schema = db.query(Schema).filter(Schema.id == schema_id).first()
+            if schema:
+                schema.enrichment_status = 'failed'
+                schema.enrichment_error = str(exc)[:500]
+                db.commit()
+        except Exception:
+            pass  # Don't let error-handling itself blow up
+    finally:
+        db.close()
 
 
 # Pydantic schemas
 class SchemaUploadRequest(BaseModel):
     """Request schema for uploading/parsing a database schema"""
     name: str = Field(..., description="Name for this schema", max_length=255)
-    connection_string: str = Field(
-        ...,
-        description="Database connection string (postgresql:// or mysql://)"
+    schema_format: str = Field(
+        default="sql_ddl",
+        description="Format of the uploaded schema: 'sql_ddl' or 'prisma'",
+        pattern="^(sql_ddl|prisma)$"
     )
-    include_sample_data: bool = Field(
-        True,
-        description="Whether to include sample data from tables"
+    db_type: Optional[str] = Field(
+        default=None,
+        description=(
+            "Database type (postgresql or mysql). "
+            "Required for sql_ddl format. "
+            "Optional for prisma format — extracted from the datasource block."
+        ),
+    )
+    sql_ddl: str = Field(
+        ...,
+        description=(
+            "Schema content. For sql_ddl: CREATE TABLE statements from pg_dump/mysqldump. "
+            "For prisma: raw content of a .prisma file."
+        ),
+        min_length=1
     )
 
 
 class ColumnResponse(BaseModel):
     """Response schema for a column"""
+    id: UUID
     name: str
     data_type: str
     is_nullable: bool
     is_primary_key: bool
     is_foreign_key: bool
-    foreign_key_table: Optional[str]
-    foreign_key_column: Optional[str]
-    enriched_description: Optional[str]
+    foreign_key_table: Optional[str] = None
+    foreign_key_column: Optional[str] = None
+    enriched_description: Optional[str] = None
+    description_source: Optional[str] = None  # 'ai' | 'user' | null
 
     class Config:
         from_attributes = True
@@ -49,11 +107,17 @@ class TableResponse(BaseModel):
     """Response schema for a table"""
     id: UUID
     name: str
-    enriched_description: Optional[str]
+    enriched_description: Optional[str] = None
+    description_source: Optional[str] = None  # 'ai' | 'user' | null
     columns: List[ColumnResponse]
 
     class Config:
         from_attributes = True
+
+
+class DescriptionUpdateRequest(BaseModel):
+    """Request body for updating a single enriched description"""
+    enriched_description: str = Field(..., min_length=1, max_length=2000)
 
 
 class SchemaResponse(BaseModel):
@@ -65,6 +129,9 @@ class SchemaResponse(BaseModel):
     created_at: str
     enriched_description: Optional[str]
     table_count: int
+    enriched_at: Optional[str] = None
+    enrichment_status: str = 'pending'   # 'pending' | 'running' | 'complete' | 'failed'
+    enrichment_error: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -73,6 +140,8 @@ class SchemaResponse(BaseModel):
 class SchemaDetailResponse(SchemaResponse):
     """Detailed response with tables and columns"""
     tables: List[TableResponse]
+    raw_ddl_text: Optional[str] = None  # Original uploaded DDL/schema text
+    schema_format: Optional[str] = None  # Source format: 'sql_ddl' | 'prisma'
 
 
 class SchemaListResponse(BaseModel):
@@ -85,49 +154,82 @@ class SchemaListResponse(BaseModel):
     "",
     response_model=SchemaResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Upload and parse a database schema"
+    summary="Upload and parse a database schema from SQL DDL"
 )
 async def upload_schema(
     schema_data: SchemaUploadRequest,
-    company: CurrentCompany,
-    db: Session = Depends(get_db)
+    background_tasks: BackgroundTasks,
+    company: CurrentCompanyEither,
+    db: Session = Depends(get_db),
 ):
     """
-    Upload and parse a database schema
+    Upload and parse a database schema from SQL DDL statements
 
-    Connects to the specified database and extracts its complete schema
-    including tables, columns, relationships, and optionally sample data.
+    **Privacy-First Design:**
+    - You NEVER provide database credentials
+    - You ONLY upload SQL DDL (schema structure)
+    - We NEVER access your database directly
+    - We NEVER store your actual data
+
+    **How to export your schema:**
+    - PostgreSQL: `pg_dump --schema-only your_database > schema.sql`
+    - MySQL: `mysqldump --no-data your_database > schema.sql`
 
     **Supported databases:**
-    - PostgreSQL (postgresql://...)
-    - MySQL (mysql://...)
-
-    **Connection string format:**
-    - PostgreSQL: `postgresql://user:password@host:port/database`
-    - MySQL: `mysql://user:password@host:port/database`
-
-    **Security:**
-    - Connection strings are not stored
-    - Only schema metadata is stored
-    - Credentials are used only during parsing
+    - PostgreSQL
+    - MySQL
 
     ## Parameters
     - **name**: Friendly name for this schema
-    - **connection_string**: Database connection URL
-    - **include_sample_data**: Include sample rows for AI context (default: true)
+    - **db_type**: Database type (postgresql or mysql)
+    - **sql_ddl**: SQL DDL statements (CREATE TABLE, ALTER TABLE, etc.)
 
     ## Response
     Returns the created schema with metadata
+
+    ## Example
+    ```json
+    {
+      "name": "E-commerce Database",
+      "db_type": "postgresql",
+      "sql_ddl": "CREATE TABLE users (id SERIAL PRIMARY KEY, email VARCHAR(255));"
+    }
+    ```
     """
     try:
-        # Parse and store schema
-        schema = await SchemaService.parse_and_store_schema(
-            db=db,
-            company_id=str(company.id),
-            schema_name=schema_data.name,
-            connection_string=schema_data.connection_string,
-            include_sample_data=schema_data.include_sample_data
-        )
+        fmt = schema_data.schema_format
+
+        if fmt == "prisma":
+            schema = await SchemaService.parse_prisma_and_store(
+                db=db,
+                company_id=str(company.id),
+                schema_name=schema_data.name,
+                prisma_schema=schema_data.sql_ddl,
+                db_type_override=schema_data.db_type,
+            )
+
+        else:  # sql_ddl (default)
+            if not schema_data.db_type:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="db_type is required when schema_format is 'sql_ddl'. Use 'postgresql' or 'mysql'.",
+                )
+            if schema_data.db_type not in ("postgresql", "mysql"):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="db_type must be 'postgresql' or 'mysql'.",
+                )
+            schema = await SchemaService.parse_sql_ddl_and_store(
+                db=db,
+                company_id=str(company.id),
+                schema_name=schema_data.name,
+                db_type=schema_data.db_type,
+                sql_ddl=schema_data.sql_ddl,
+            )
+
+        # Schedule AI enrichment in the background so the response is instant.
+        # The task creates its own DB session; failures are silent to the caller.
+        background_tasks.add_task(_enrich_in_background, str(schema.id))
 
         return SchemaResponse(
             id=schema.id,
@@ -136,14 +238,14 @@ async def upload_schema(
             is_active=schema.is_active,
             created_at=schema.created_at.isoformat(),
             enriched_description=schema.enriched_description,
-            table_count=len(schema.tables)
+            enriched_at=schema.enriched_at.isoformat() if schema.enriched_at else None,
+            table_count=len(schema.tables),
+            enrichment_status=schema.enrichment_status or 'pending',
+            enrichment_error=schema.enrichment_error,
         )
 
-    except ConnectionError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to connect to database: {str(e)}"
-        )
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -162,7 +264,7 @@ async def upload_schema(
     summary="List all schemas"
 )
 async def list_schemas(
-    company: CurrentCompany,
+    company: CurrentCompanyEither,
     db: Session = Depends(get_db),
     active_only: bool = True
 ):
@@ -189,7 +291,10 @@ async def list_schemas(
             is_active=s.is_active,
             created_at=s.created_at.isoformat(),
             enriched_description=s.enriched_description,
-            table_count=len(s.tables)
+            enriched_at=s.enriched_at.isoformat() if s.enriched_at else None,
+            table_count=len(s.tables),
+            enrichment_status=s.enrichment_status or 'pending',
+            enrichment_error=s.enrichment_error,
         )
         for s in schemas
     ]
@@ -207,7 +312,7 @@ async def list_schemas(
 )
 async def get_schema(
     schema_id: UUID,
-    company: CurrentCompany,
+    company: CurrentCompanyEither,
     db: Session = Depends(get_db)
 ):
     """
@@ -246,6 +351,7 @@ async def get_schema(
                 id=table.id,
                 name=table.name,
                 enriched_description=table.enriched_description,
+                description_source=table.description_source,
                 columns=columns_response
             )
         )
@@ -257,8 +363,13 @@ async def get_schema(
         is_active=schema.is_active,
         created_at=schema.created_at.isoformat(),
         enriched_description=schema.enriched_description,
+        enriched_at=schema.enriched_at.isoformat() if schema.enriched_at else None,
         table_count=len(schema.tables),
-        tables=tables_response
+        tables=tables_response,
+        raw_ddl_text=schema.raw_ddl_text,
+        schema_format=schema.schema_format,
+        enrichment_status=schema.enrichment_status or 'pending',
+        enrichment_error=schema.enrichment_error,
     )
 
 
@@ -269,7 +380,7 @@ async def get_schema(
 )
 async def delete_schema(
     schema_id: UUID,
-    company: CurrentCompany,
+    company: CurrentCompanyEither,
     db: Session = Depends(get_db)
 ):
     """
@@ -299,6 +410,129 @@ async def delete_schema(
     return None
 
 
+@router.patch(
+    "/{schema_id}",
+    response_model=SchemaResponse,
+    summary="Update the schema-level description"
+)
+async def update_schema_description(
+    schema_id: UUID,
+    body: DescriptionUpdateRequest,
+    company: CurrentCompanyEither,
+    db: Session = Depends(get_db),
+):
+    """
+    Manually set or edit the schema-level description.
+    Marks description_source as 'user' so re-enrichment won't overwrite it.
+    """
+    schema = SchemaService.get_schema_by_id(db, str(schema_id), str(company.id))
+    if not schema:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+
+    schema.enriched_description = body.enriched_description
+    schema.description_source = "user"
+    db.commit()
+    db.refresh(schema)
+
+    return SchemaResponse(
+        id=schema.id,
+        name=schema.name,
+        db_type=schema.db_type.value,
+        is_active=schema.is_active,
+        created_at=schema.created_at.isoformat(),
+        enriched_description=schema.enriched_description,
+        enriched_at=schema.enriched_at.isoformat() if schema.enriched_at else None,
+        table_count=len(schema.tables),
+    )
+
+
+@router.patch(
+    "/{schema_id}/tables/{table_id}",
+    response_model=TableResponse,
+    summary="Update a table description"
+)
+async def update_table_description(
+    schema_id: UUID,
+    table_id: UUID,
+    body: DescriptionUpdateRequest,
+    company: CurrentCompanyEither,
+    db: Session = Depends(get_db),
+):
+    """
+    Manually set or edit a table's enriched description.
+    Marks description_source as 'user' so re-enrichment won't overwrite it.
+    """
+    schema = SchemaService.get_schema_by_id(db, str(schema_id), str(company.id))
+    if not schema:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+
+    table = (
+        db.query(SchemaTable)
+        .filter(SchemaTable.id == table_id, SchemaTable.schema_id == schema_id)
+        .first()
+    )
+    if not table:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Table not found")
+
+    table.enriched_description = body.enriched_description
+    table.description_source = "user"
+    db.commit()
+    db.refresh(table)
+
+    return TableResponse(
+        id=table.id,
+        name=table.name,
+        enriched_description=table.enriched_description,
+        description_source=table.description_source,
+        columns=[ColumnResponse.from_orm(c) for c in table.columns],
+    )
+
+
+@router.patch(
+    "/{schema_id}/tables/{table_id}/columns/{column_id}",
+    response_model=ColumnResponse,
+    summary="Update a column description"
+)
+async def update_column_description(
+    schema_id: UUID,
+    table_id: UUID,
+    column_id: UUID,
+    body: DescriptionUpdateRequest,
+    company: CurrentCompanyEither,
+    db: Session = Depends(get_db),
+):
+    """
+    Manually set or edit a column's enriched description.
+    Marks description_source as 'user' so re-enrichment won't overwrite it.
+    """
+    schema = SchemaService.get_schema_by_id(db, str(schema_id), str(company.id))
+    if not schema:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+
+    table = (
+        db.query(SchemaTable)
+        .filter(SchemaTable.id == table_id, SchemaTable.schema_id == schema_id)
+        .first()
+    )
+    if not table:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Table not found")
+
+    column = (
+        db.query(SchemaColumn)
+        .filter(SchemaColumn.id == column_id, SchemaColumn.table_id == table_id)
+        .first()
+    )
+    if not column:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Column not found")
+
+    column.enriched_description = body.enriched_description
+    column.description_source = "user"
+    db.commit()
+    db.refresh(column)
+
+    return ColumnResponse.from_orm(column)
+
+
 @router.post(
     "/{schema_id}/enrich",
     response_model=SchemaResponse,
@@ -306,7 +540,7 @@ async def delete_schema(
 )
 async def enrich_schema(
     schema_id: UUID,
-    company: CurrentCompany,
+    company: CurrentCompanyEither,
     db: Session = Depends(get_db)
 ):
     """
@@ -357,7 +591,8 @@ async def enrich_schema(
             is_active=enriched_schema.is_active,
             created_at=enriched_schema.created_at.isoformat(),
             enriched_description=enriched_schema.enriched_description,
-            table_count=len(enriched_schema.tables)
+            enriched_at=enriched_schema.enriched_at.isoformat() if enriched_schema.enriched_at else None,
+            table_count=len(enriched_schema.tables),
         )
 
     except ValueError as e:

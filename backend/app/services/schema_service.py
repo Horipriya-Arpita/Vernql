@@ -10,6 +10,8 @@ import structlog
 from app.services.schema_parser import SchemaInfo
 from app.services.postgres_parser import PostgreSQLParser
 from app.services.mysql_parser import MySQLParser
+from app.services.sql_ddl_parser import parse_sql_ddl
+from app.services.prisma_parser import parse_prisma_schema
 from app.models import (
     Schema,
     SchemaTable,
@@ -110,11 +112,136 @@ class SchemaService:
         return schema
 
     @staticmethod
+    async def parse_sql_ddl_and_store(
+        db: Session,
+        company_id: str,
+        schema_name: str,
+        db_type: str,
+        sql_ddl: str
+    ) -> Schema:
+        """
+        Parse SQL DDL and store schema (privacy-first approach)
+
+        This method NEVER accesses customer databases. It only parses SQL DDL text.
+
+        Args:
+            db: Database session
+            company_id: UUID of the company
+            schema_name: Name for this schema
+            db_type: Database type ('postgresql' or 'mysql')
+            sql_ddl: SQL DDL statements (CREATE TABLE, etc.)
+
+        Returns:
+            Schema: The created schema object
+
+        Raises:
+            ValueError: If SQL parsing fails
+        """
+        logger.info(
+            "Starting SQL DDL parsing (privacy-first mode)",
+            company_id=company_id,
+            schema_name=schema_name,
+            db_type=db_type,
+            ddl_length=len(sql_ddl)
+        )
+
+        # Parse SQL DDL to extract schema structure
+        schema_info: SchemaInfo = parse_sql_ddl(sql_ddl, db_type)
+
+        logger.info(
+            "SQL DDL parsed successfully",
+            tables=len(schema_info.tables),
+            database_type=schema_info.database_type
+        )
+
+        # Store in database, preserving the original DDL text verbatim
+        schema = SchemaService._store_schema(
+            db=db,
+            company_id=company_id,
+            schema_name=schema_name,
+            schema_info=schema_info,
+            raw_ddl_text=sql_ddl,
+            schema_format="sql_ddl"
+        )
+
+        logger.info(
+            "Schema stored successfully (from DDL)",
+            schema_id=str(schema.id),
+            tables=len(schema.tables)
+        )
+
+        return schema
+
+    @staticmethod
+    async def parse_prisma_and_store(
+        db: Session,
+        company_id: str,
+        schema_name: str,
+        prisma_schema: str,
+        db_type_override: Optional[str] = None,
+    ) -> Schema:
+        """
+        Parse a Prisma schema file and store the extracted structure.
+
+        The db_type is read from the datasource block inside the Prisma file.
+        db_type_override forces a specific type when the block is absent.
+
+        Args:
+            db: Database session
+            company_id: UUID of the company
+            schema_name: Friendly name for this schema
+            prisma_schema: Raw .prisma file text
+            db_type_override: Optional 'postgresql' | 'mysql' fallback
+
+        Returns:
+            Schema: The created schema object
+        """
+        logger.info(
+            "Starting Prisma schema parsing",
+            company_id=company_id,
+            schema_name=schema_name,
+            schema_length=len(prisma_schema),
+        )
+
+        schema_info: SchemaInfo = parse_prisma_schema(prisma_schema, db_type_override)
+
+        if not schema_info.tables:
+            raise ValueError(
+                "No models were found in the Prisma schema. "
+                "Make sure the file contains at least one 'model' block."
+            )
+
+        logger.info(
+            "Prisma schema parsed successfully",
+            tables=len(schema_info.tables),
+            database_type=schema_info.database_type,
+        )
+
+        schema = SchemaService._store_schema(
+            db=db,
+            company_id=company_id,
+            schema_name=schema_name,
+            schema_info=schema_info,
+            raw_ddl_text=prisma_schema,
+            schema_format="prisma",
+        )
+
+        logger.info(
+            "Schema stored successfully (from Prisma)",
+            schema_id=str(schema.id),
+            tables=len(schema.tables),
+        )
+
+        return schema
+
+    @staticmethod
     def _store_schema(
         db: Session,
         company_id: str,
         schema_name: str,
-        schema_info: SchemaInfo
+        schema_info: SchemaInfo,
+        raw_ddl_text: Optional[str] = None,
+        schema_format: Optional[str] = None
     ) -> Schema:
         """
         Store parsed schema in database
@@ -145,7 +272,9 @@ class SchemaService:
                 "database_name": schema_info.database_name,
                 "version": schema_info.version,
                 "table_count": len(schema_info.tables)
-            }
+            },
+            raw_ddl_text=raw_ddl_text,
+            schema_format=schema_format
         )
 
         db.add(schema)
@@ -175,6 +304,7 @@ class SchemaService:
                     is_nullable=col_info.is_nullable,
                     is_primary_key=col_info.is_primary_key,
                     is_foreign_key=col_info.is_foreign_key,
+                    is_unique=col_info.is_unique,
                     foreign_key_table=col_info.foreign_key_table,
                     foreign_key_column=col_info.foreign_key_column
                 )

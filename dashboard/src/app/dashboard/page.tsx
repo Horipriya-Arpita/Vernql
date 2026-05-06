@@ -1,15 +1,27 @@
 'use client'
 
+import { useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
-import ApiKeyInput from '@/components/ApiKeyInput'
 import DashboardLayout from '@/components/DashboardLayout'
 import Link from 'next/link'
 
 export default function DashboardPage() {
-  const { isAuthenticated } = useAuth()
+  const { isAuthenticated, isLoading } = useAuth()
+  const router = useRouter()
 
-  if (!isAuthenticated) {
-    return <ApiKeyInput />
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) {
+      router.replace('/login')
+    }
+  }, [isLoading, isAuthenticated, router])
+
+  if (isLoading || !isAuthenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600" />
+      </div>
+    )
   }
 
   return (

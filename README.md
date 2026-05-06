@@ -17,7 +17,9 @@ Any company's employee can ask a question in plain English and get a beautiful, 
 - ✅ Rate limiting
 - ✅ Query history
 
-### Phase 2 (Coming Soon)
+### Phase 2 (Current)
+- ✅ **Embeddable Chat Widget** - Drop-in widget for any website
+- ✅ Code snippet generation (Python, Node.js, PHP, etc.)
 - 🔄 Automatic visualization generation
 - 🔄 Role-based access control (RBAC)
 - 🔄 SQL Server support
@@ -52,6 +54,60 @@ Any company's employee can ask a question in plain English and get a beautiful, 
 │Postgres│ │Redis │
 └────────┘ └──────┘
 ```
+
+## 🎨 Integration Options
+
+Vernql provides **two ways** to integrate:
+
+### 1. **Embeddable Chat Widget** (Easiest) ⭐
+
+Drop-in chat widget for any website - **no coding required**!
+
+```html
+<!-- Add to your website -->
+<script src="https://cdn.vernql.com/widget.js"></script>
+<script>
+  Vernql.init({
+    apiKey: 'YOUR_API_KEY',
+    schemaId: 'YOUR_SCHEMA_ID'
+  })
+</script>
+```
+
+**Features:**
+- ✅ Works with **any** tech stack (PHP, WordPress, React, Vue, etc.)
+- ✅ Zero build process
+- ✅ Beautiful chat interface
+- ✅ Dark mode support
+- ✅ Mobile responsive
+- ✅ Fully customizable
+
+**[See Widget Documentation →](widget/README.md)**
+
+### 2. **REST API Integration** (Advanced)
+
+For developers who want full control:
+
+```python
+import requests
+
+response = requests.post(
+    'https://api.vernql.com/v1/queries',
+    headers={'X-API-Key': 'YOUR_API_KEY'},
+    json={
+        'schema_id': 'YOUR_SCHEMA_ID',
+        'query': 'Show me users who signed up this week'
+    }
+)
+
+sql = response.json()['generated_sql']
+```
+
+**Auto-generated code snippets available for:**
+- Python (Flask, FastAPI, Django)
+- Node.js (Express)
+- PHP
+- cURL
 
 ## 📋 Prerequisites
 
@@ -102,7 +158,8 @@ docker-compose --profile full up -d
 ```bash
 cd backend
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate  # On Windows: 
+source venv/Scripts/activate
 ```
 
 2. Install dependencies:

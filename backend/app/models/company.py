@@ -47,6 +47,11 @@ class Company(Base):
     )
 
     # Relationships
+    users = relationship(
+        "User",
+        back_populates="company",
+        cascade="all, delete-orphan"
+    )
     api_keys = relationship(
         "APIKey",
         back_populates="company",
@@ -59,6 +64,16 @@ class Company(Base):
     )
     queries = relationship(
         "Query",
+        back_populates="company",
+        cascade="all, delete-orphan"
+    )
+    query_results = relationship(
+        "QueryResult",
+        back_populates="company",
+        cascade="all, delete-orphan"
+    )
+    sessions = relationship(
+        "Session",
         back_populates="company",
         cascade="all, delete-orphan"
     )

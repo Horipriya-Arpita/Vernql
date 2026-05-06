@@ -3,7 +3,8 @@ Rate limiting middleware using Redis
 """
 import time
 from typing import Callable
-from fastapi import Request, Response, HTTPException, status
+from fastapi import Request, Response, status
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 import redis
 import structlog
@@ -88,31 +89,26 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Check rate limits
         try:
-            self._check_rate_limit(api_key)
-        except HTTPException:
-            raise
+            rate_limit_response = self._check_rate_limit(api_key)
+            if rate_limit_response is not None:
+                return rate_limit_response
         except Exception as e:
-            # SECURITY: Fail closed on Redis errors to prevent rate limit bypass
-            logger.error("Rate limit check failed - failing closed for security", error=str(e))
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Rate limiting service temporarily unavailable. Please try again later."
-            )
+            # Fail open when Redis is unavailable — log the error but let the request through.
+            # Raising an exception here would bypass CORSMiddleware and surface as a spurious
+            # CORS error on the client even though the real problem is Redis being down.
+            logger.error("Rate limit check failed - failing open", error=str(e))
 
         # Process request
         response = await call_next(request)
 
         return response
 
-    def _check_rate_limit(self, api_key: str) -> None:
+    def _check_rate_limit(self, api_key: str) -> JSONResponse | None:
         """
-        Check if request is within rate limits
+        Check if request is within rate limits.
 
-        Args:
-            api_key: The API key to check
-
-        Raises:
-            HTTPException: 429 if rate limit exceeded
+        Returns a JSONResponse if the limit is exceeded, None if the request is allowed.
+        Raises an exception if Redis is unavailable (caller handles fail-open).
         """
         current_time = int(time.time())
         key_hash = api_key[:16]  # Use first 16 chars for privacy
@@ -132,9 +128,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 count=minute_count,
                 limit=settings.RATE_LIMIT_PER_MINUTE
             )
-            raise HTTPException(
+            return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Rate limit exceeded: {settings.RATE_LIMIT_PER_MINUTE} requests per minute",
+                content={"detail": f"Rate limit exceeded: {settings.RATE_LIMIT_PER_MINUTE} requests per minute"},
                 headers={
                     "X-RateLimit-Limit": str(settings.RATE_LIMIT_PER_MINUTE),
                     "X-RateLimit-Remaining": str(max(0, settings.RATE_LIMIT_PER_MINUTE - minute_count)),
@@ -157,15 +153,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 count=hour_count,
                 limit=settings.RATE_LIMIT_PER_HOUR
             )
-            raise HTTPException(
+            return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Rate limit exceeded: {settings.RATE_LIMIT_PER_HOUR} requests per hour",
+                content={"detail": f"Rate limit exceeded: {settings.RATE_LIMIT_PER_HOUR} requests per hour"},
                 headers={
                     "X-RateLimit-Limit": str(settings.RATE_LIMIT_PER_HOUR),
                     "X-RateLimit-Remaining": str(max(0, settings.RATE_LIMIT_PER_HOUR - hour_count)),
                     "X-RateLimit-Reset": str((current_time // 3600 + 1) * 3600),
                 }
             )
+
+        return None
 
     def _increment_counter(self, key: str, ttl: int, limit: int) -> int:
         """
