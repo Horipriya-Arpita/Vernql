@@ -7,14 +7,18 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from datetime import datetime
+import structlog
+from fastapi import Request
 
 from app.db.database import get_db
 from app.core.dependencies import CurrentCompany, CurrentCompanyEither
 from app.services.sql_generator import SQLGenerator
 from app.services.session_service import SessionService
+from app.services.audit_service import AuditService, AuditAction
 from app.models import Query, QueryStatus
 
 router = APIRouter(prefix="/queries", tags=["Queries"])
+logger = structlog.get_logger()
 
 
 # Pydantic schemas
@@ -57,6 +61,7 @@ class QueryHistoryResponse(BaseModel):
 async def generate_query(
     query_data: QueryRequest,
     company: CurrentCompanyEither,
+    request: Request,
     db: Session = Depends(get_db)
 ):
     """
@@ -145,7 +150,7 @@ async def generate_query(
             # Set session title from first question
             session_svc.set_title_if_empty(resolved_session, query_data.query)
 
-        return QueryResponse(
+        response = QueryResponse(
             id=query_record.id,
             natural_language_query=query_record.natural_language_query,
             generated_sql=query_record.generated_sql,
@@ -158,6 +163,23 @@ async def generate_query(
             created_at=query_record.created_at.isoformat()
         )
 
+        AuditService.log(
+            db=db,
+            company_id=company.id,
+            action=AuditAction.QUERY_GENERATE,
+            resource_type="query",
+            resource_id=query_record.id,
+            details={
+                "schema_id":   str(query_data.schema_id),
+                "confidence":  result.confidence,
+                "ai_provider": query_record.ai_provider,
+                "warnings":    result.warnings,
+            },
+            request=request,
+        )
+
+        return response
+
     except HTTPException:
         raise
     except ValueError as e:
@@ -166,9 +188,10 @@ async def generate_query(
             detail=str(e)
         )
     except Exception as e:
+        logger.error("SQL generation failed", error=str(e), schema_id=str(query_data.schema_id))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate SQL: {str(e)}"
+            detail="Failed to generate SQL. Please try again or contact support."
         )
 
 

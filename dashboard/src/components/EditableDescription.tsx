@@ -4,14 +4,10 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { Pencil, Check, X, Sparkles, User } from 'lucide-react'
 
 interface EditableDescriptionProps {
-  /** Current description text (null/undefined = not yet enriched) */
   description?: string | null
-  /** Who wrote it: 'ai', 'user', or null */
   source?: 'ai' | 'user' | null
-  /** Called with the new text when the user saves */
   onSave: (text: string) => Promise<void>
   placeholder?: string
-  /** Render as compact single-line (e.g. column cell) vs full block */
   compact?: boolean
   className?: string
 }
@@ -30,17 +26,14 @@ export default function EditableDescription({
   const [error, setError] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // Sync external description changes (e.g. after AI enrichment)
   useEffect(() => {
     if (!editing) setDraft(description ?? '')
   }, [description, editing])
 
-  // Auto-focus and auto-size when entering edit mode
   useEffect(() => {
     if (editing && textareaRef.current) {
       const el = textareaRef.current
       el.focus()
-      // Move cursor to end
       el.setSelectionRange(el.value.length, el.value.length)
       autoSize(el)
     }
@@ -52,25 +45,14 @@ export default function EditableDescription({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Escape') {
-      cancel()
-    } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      save()
-    }
+    if (e.key === 'Escape') cancel()
+    else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save()
   }
 
   const save = useCallback(async () => {
     const trimmed = draft.trim()
-    if (!trimmed) {
-      setError('Description cannot be empty')
-      return
-    }
-    if (trimmed === (description ?? '').trim()) {
-      // No change — just close
-      setEditing(false)
-      return
-    }
-
+    if (!trimmed) { setError('Description cannot be empty'); return }
+    if (trimmed === (description ?? '').trim()) { setEditing(false); return }
     setSaving(true)
     setError('')
     try {
@@ -83,80 +65,60 @@ export default function EditableDescription({
     }
   }, [draft, description, onSave])
 
-  const cancel = () => {
-    setDraft(description ?? '')
-    setError('')
-    setEditing(false)
-  }
+  const cancel = () => { setDraft(description ?? ''); setError(''); setEditing(false) }
 
-  // -----------------------------------------------------------------------
-  // Source badge
-  // -----------------------------------------------------------------------
+  // ── Source badge ──
   const SourceBadge = () => {
     if (!source) return null
-    if (source === 'user') {
-      return (
-        <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-medium shrink-0">
-          <User className="w-2.5 h-2.5" />
-          Edited
-        </span>
-      )
-    }
+    if (source === 'user') return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-md bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 font-medium flex-shrink-0">
+        <User className="w-2.5 h-2.5" /> Edited
+      </span>
+    )
     return (
-      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 font-medium shrink-0">
-        <Sparkles className="w-2.5 h-2.5" />
-        AI
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-md bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 font-medium flex-shrink-0">
+        <Sparkles className="w-2.5 h-2.5" /> AI
       </span>
     )
   }
 
-  // -----------------------------------------------------------------------
-  // Edit mode
-  // -----------------------------------------------------------------------
+  // ── Edit mode ──
   if (editing) {
     return (
       <div className={`space-y-2 ${className}`}>
         <textarea
           ref={textareaRef}
           value={draft}
-          onChange={(e) => {
-            setDraft(e.target.value)
-            autoSize(e.target)
-          }}
+          onChange={(e) => { setDraft(e.target.value); autoSize(e.target) }}
           onKeyDown={handleKeyDown}
           rows={compact ? 2 : 3}
-          className="w-full px-3 py-2 border border-blue-400 rounded-lg text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+          className="w-full px-3 py-2 border border-blue-400 dark:border-blue-500 rounded-lg text-sm text-slate-800 dark:text-slate-200 bg-white dark:bg-slate-700/60 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none transition"
           disabled={saving}
         />
-        {error && <p className="text-xs text-red-600">{error}</p>}
+        {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
         <div className="flex items-center gap-2">
           <button
-            onClick={save}
-            disabled={saving}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            onClick={save} disabled={saving}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             <Check className="w-3.5 h-3.5" />
             {saving ? 'Saving…' : 'Save'}
           </button>
           <button
-            onClick={cancel}
-            disabled={saving}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-300 text-gray-700 text-xs font-medium rounded-md hover:bg-gray-50 disabled:opacity-50 transition-colors"
+            onClick={cancel} disabled={saving}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 text-xs font-medium rounded-lg hover:bg-slate-50 dark:hover:bg-slate-600 disabled:opacity-50 transition-colors"
           >
-            <X className="w-3.5 h-3.5" />
-            Cancel
+            <X className="w-3.5 h-3.5" /> Cancel
           </button>
-          <span className="text-xs text-gray-400 ml-1">
-            {navigator?.platform?.includes('Mac') ? '⌘' : 'Ctrl'}+Enter to save · Esc to cancel
+          <span className="text-xs text-slate-400 dark:text-slate-500 ml-1">
+            {typeof navigator !== 'undefined' && navigator.platform?.includes('Mac') ? '⌘' : 'Ctrl'}+Enter to save · Esc to cancel
           </span>
         </div>
       </div>
     )
   }
 
-  // -----------------------------------------------------------------------
-  // View mode
-  // -----------------------------------------------------------------------
+  // ── View mode ──
   return (
     <div
       className={`group flex items-start gap-2 cursor-pointer ${className}`}
@@ -165,19 +127,18 @@ export default function EditableDescription({
     >
       <div className="flex-1 min-w-0">
         {description ? (
-          <span className={`text-gray-700 ${compact ? 'text-sm' : 'text-base'}`}>
+          <span className={`text-slate-700 dark:text-slate-300 ${compact ? 'text-sm' : 'text-base'}`}>
             {description}
           </span>
         ) : (
-          <span className={`text-gray-400 italic ${compact ? 'text-sm' : 'text-base'}`}>
+          <span className={`text-slate-400 dark:text-slate-500 italic ${compact ? 'text-sm' : 'text-base'}`}>
             {placeholder}
           </span>
         )}
       </div>
-
-      <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
+      <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
         <SourceBadge />
-        <Pencil className="w-3.5 h-3.5 text-gray-300 group-hover:text-blue-500 transition-colors" />
+        <Pencil className="w-3.5 h-3.5 text-slate-300 dark:text-slate-600 group-hover:text-blue-500 dark:group-hover:text-blue-400 transition-colors" />
       </div>
     </div>
   )

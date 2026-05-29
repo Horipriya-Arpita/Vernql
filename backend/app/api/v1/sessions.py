@@ -9,7 +9,7 @@ from typing import List, Optional, Any
 from uuid import UUID
 from datetime import datetime
 
-import redis.asyncio as aioredis
+from app.core.redis_client import get_redis
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -259,8 +259,10 @@ async def stream_session(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     async def event_generator():
-        redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
-        pubsub = redis_client.pubsub()
+        # Use the shared pool — create a dedicated pubsub object from it.
+        # We close only the pubsub on teardown, NOT the underlying pool client,
+        # so other concurrent requests keep their connections alive.
+        pubsub = get_redis().pubsub()
         channel = f"session:{session_id}"
 
         await pubsub.subscribe(channel)
@@ -279,7 +281,7 @@ async def stream_session(
             pass
         finally:
             await pubsub.unsubscribe(channel)
-            await redis_client.aclose()
+            await pubsub.aclose()
 
     return StreamingResponse(
         event_generator(),

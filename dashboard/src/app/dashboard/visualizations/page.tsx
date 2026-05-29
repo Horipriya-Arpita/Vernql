@@ -5,6 +5,7 @@ import useSWR from 'swr';
 import { apiClient } from '@/lib/api-client';
 import { BarChart3, Share2, Eye, Trash2, Sparkles, Calendar } from 'lucide-react';
 import { VisualizationRenderer } from '@/components/charts';
+import DashboardLayout from '@/components/DashboardLayout';
 import toast from 'react-hot-toast';
 
 export default function VisualizationsPage() {
@@ -63,24 +64,24 @@ export default function VisualizationsPage() {
 
   if (error) {
     return (
-      <div className="p-8">
-        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+      <DashboardLayout>
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4">
           <p className="text-red-800 dark:text-red-200">
             Failed to load visualizations: {error.message}
           </p>
         </div>
-      </div>
+      </DashboardLayout>
     );
   }
 
   return (
-    <div className="p-8">
+    <DashboardLayout>
       {/* Header */}
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
+        <h1 className="text-4xl font-bold text-slate-900 dark:text-white tracking-tight mb-1.5">
           Visualizations
         </h1>
-        <p className="text-gray-600 dark:text-gray-400">
+        <p className="text-slate-500 dark:text-slate-400 text-lg">
           View and manage your query visualizations with AI-powered insights
         </p>
       </div>
@@ -234,6 +235,6 @@ export default function VisualizationsPage() {
           )}
         </div>
       </div>
-    </div>
+    </DashboardLayout>
   );
 }

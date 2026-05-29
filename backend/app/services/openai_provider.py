@@ -1,13 +1,20 @@
 """
 OpenAI Provider Implementation
 """
+import asyncio
 from typing import List
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, APITimeoutError, APIConnectionError
 import structlog
 
 from app.services.ai_provider import BaseAIProvider, AIMessage, AIResponse
+from app.core.config import settings
 
 logger = structlog.get_logger()
+
+# Errors that are safe to retry (transient network/infra issues)
+_RETRYABLE_ERRORS = (APITimeoutError, APIConnectionError)
+_MAX_RETRIES = 2
+_RETRY_BACKOFF = 2.0  # seconds before first retry; doubles each attempt
 
 
 class OpenAIProvider(BaseAIProvider):
@@ -19,7 +26,7 @@ class OpenAIProvider(BaseAIProvider):
 
     def __init__(self, api_key: str, model: str = "gpt-4o"):
         super().__init__(api_key, model)
-        self.client = AsyncOpenAI(api_key=api_key)
+        self.client = AsyncOpenAI(api_key=api_key, timeout=settings.AI_TIMEOUT)
 
     async def chat_completion(
         self,
@@ -40,59 +47,80 @@ class OpenAIProvider(BaseAIProvider):
         Returns:
             AIResponse with generated content
         """
-        try:
-            # Convert messages to OpenAI format
-            openai_messages = [
-                {"role": msg.role, "content": msg.content}
-                for msg in messages
-            ]
+        openai_messages = [
+            {"role": msg.role, "content": msg.content}
+            for msg in messages
+        ]
 
-            self.logger.info(
-                "Requesting OpenAI completion",
-                model=self.model,
-                message_count=len(messages)
-            )
+        last_error: Exception = RuntimeError("No attempts made")
+        for attempt in range(1 + _MAX_RETRIES):
+            if attempt > 0:
+                delay = _RETRY_BACKOFF * (2 ** (attempt - 1))
+                self.logger.warning(
+                    "Retrying OpenAI completion",
+                    attempt=attempt,
+                    delay=delay,
+                    error=str(last_error),
+                    model=self.model,
+                )
+                await asyncio.sleep(delay)
 
-            # Make API call
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=openai_messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                **kwargs
-            )
+            try:
+                self.logger.info(
+                    "Requesting OpenAI completion",
+                    model=self.model,
+                    message_count=len(messages)
+                )
 
-            # Extract response
-            content = response.choices[0].message.content
-            tokens_used = response.usage.total_tokens if response.usage else None
-            finish_reason = response.choices[0].finish_reason
+                response = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=openai_messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    **kwargs
+                )
 
-            self.logger.info(
-                "OpenAI completion successful",
-                model=self.model,
-                tokens=tokens_used,
-                finish_reason=finish_reason
-            )
+                content = response.choices[0].message.content
+                tokens_used = response.usage.total_tokens if response.usage else None
+                finish_reason = response.choices[0].finish_reason
 
-            return AIResponse(
-                content=content,
-                model=self.model,
-                provider="openai",
-                tokens_used=tokens_used,
-                finish_reason=finish_reason,
-                metadata={
-                    "response_id": response.id,
-                    "created": response.created
-                }
-            )
+                self.logger.info(
+                    "OpenAI completion successful",
+                    model=self.model,
+                    tokens=tokens_used,
+                    finish_reason=finish_reason
+                )
 
-        except Exception as e:
-            self.logger.error(
-                "OpenAI completion failed",
-                error=str(e),
-                model=self.model
-            )
-            raise
+                return AIResponse(
+                    content=content,
+                    model=self.model,
+                    provider="openai",
+                    tokens_used=tokens_used,
+                    finish_reason=finish_reason,
+                    metadata={
+                        "response_id": response.id,
+                        "created": response.created
+                    }
+                )
+
+            except _RETRYABLE_ERRORS as e:
+                last_error = e
+                self.logger.error(
+                    "OpenAI completion failed",
+                    error=str(e),
+                    model=self.model,
+                    attempt=attempt,
+                )
+            except Exception as e:
+                # Non-retryable (auth errors, bad requests, etc.) — fail immediately
+                self.logger.error(
+                    "OpenAI completion failed",
+                    error=str(e),
+                    model=self.model,
+                )
+                raise
+
+        raise last_error
 
     def get_provider_name(self) -> str:
         """Get provider name"""

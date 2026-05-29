@@ -23,7 +23,7 @@ from typing import Optional
 import structlog
 from sqlalchemy.orm import Session
 
-from app.models import Schema, SchemaColumn, SchemaTable
+from app.models import Schema, SchemaColumn, SchemaTable, DescriptionSource
 from app.services.ai_provider import AIProviderFactory, BaseAIProvider
 
 logger = structlog.get_logger()
@@ -234,18 +234,18 @@ Include ALL columns listed under the focus table. JSON:"""
         )
         data = self._parse_json(raw)
 
-        if "description" in data and table.description_source != "user":
+        if "description" in data and table.description_source != DescriptionSource.USER:
             table.enriched_description = data["description"].strip()
-            table.description_source = "ai"
+            table.description_source = DescriptionSource.AI
 
         cols_data: dict = data.get("columns", {})
         for col in table.columns:
-            if col.description_source == "user":
+            if col.description_source == DescriptionSource.USER:
                 continue
             raw_desc = cols_data.get(col.name, "")
             if raw_desc:
                 col.enriched_description = self._clean(str(raw_desc))
-                col.description_source = "ai"
+                col.description_source = DescriptionSource.AI
 
     # ------------------------------------------------------------------
     # Strategy 3: Legacy — original N+1 per-column calls (no cross-table ctx)
@@ -438,27 +438,27 @@ Include ALL columns listed under the focus table. JSON:"""
         Apply a fully-parsed enrichment JSON dict to the Schema ORM objects.
         Skips any field whose description_source == 'user' (user-edited).
         """
-        if "schema_description" in data and schema.description_source != "user":
+        if "schema_description" in data and schema.description_source != DescriptionSource.USER:
             schema.enriched_description = str(data["schema_description"]).strip()
-            schema.description_source = "ai"
+            schema.description_source = DescriptionSource.AI
 
         tables_data: dict = data.get("tables", {})
 
         for table in schema.tables:
             table_data = tables_data.get(table.name, {})
 
-            if "description" in table_data and table.description_source != "user":
+            if "description" in table_data and table.description_source != DescriptionSource.USER:
                 table.enriched_description = str(table_data["description"]).strip()
-                table.description_source = "ai"
+                table.description_source = DescriptionSource.AI
 
             cols_data: dict = table_data.get("columns", {})
             for col in table.columns:
-                if col.description_source == "user":
+                if col.description_source == DescriptionSource.USER:
                     continue  # preserve user-edited column descriptions
                 raw_desc = cols_data.get(col.name, "")
                 if raw_desc:
                     col.enriched_description = self._clean(str(raw_desc))
-                    col.description_source = "ai"
+                    col.description_source = DescriptionSource.AI
 
     @staticmethod
     def _clean(text: str) -> str:

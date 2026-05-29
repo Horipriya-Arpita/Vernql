@@ -157,6 +157,15 @@ class SQLGenerator:
         )
         result.confidence = confidence
 
+        # Flag low-confidence results so the caller (and the widget) can warn the user.
+        # The query is still returned — it's the client's choice whether to execute it.
+        if confidence < settings.SQL_CONFIDENCE_THRESHOLD:
+            result.warnings.append(
+                f"Low confidence ({confidence:.0%}): the generated SQL may not accurately "
+                "reflect your question. Review it carefully before executing, or try "
+                "rephrasing your query with more specific table or column names."
+            )
+
         # Auto-create example from high-confidence queries
         if confidence >= 0.9 and not has_errors and self.use_examples:
             self.example_manager.auto_create_example_from_query(

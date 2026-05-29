@@ -327,7 +327,7 @@ async def update_current_user(
     ## Response
     Returns updated user information
     """
-    update_dict = update_data.dict(exclude_unset=True)
+    update_dict = update_data.model_dump(exclude_unset=True)
 
     # Check if email is being changed and if it's already taken
     if 'email' in update_dict and update_dict['email'] != current_user.email:
@@ -420,6 +420,9 @@ class APIKeyCreate(BaseModel):
     expires_at: Optional[datetime] = Field(None, description="Expiration date (null = never expires)")
 
 
+_EXPIRY_WARNING_DAYS = 7  # show warning badge when this many days remain
+
+
 class APIKeyResponse(BaseModel):
     """Response schema for API key (without the actual key)"""
     id: UUID
@@ -430,9 +433,35 @@ class APIKeyResponse(BaseModel):
     created_at: datetime
     expires_at: Optional[datetime]
     last_used_at: Optional[datetime]
+    # Computed expiry helpers — null when the key has no expiry date
+    days_until_expiry: Optional[int] = None
+    is_expiring_soon:  bool          = False
 
     class Config:
         from_attributes = True
+
+    @classmethod
+    def from_api_key(cls, key: "APIKey") -> "APIKeyResponse":
+        """Build response with computed expiry warning fields."""
+        days: Optional[int] = None
+        expiring_soon = False
+        if key.expires_at:
+            from datetime import timezone
+            delta = key.expires_at - datetime.now(timezone.utc)
+            days = max(0, delta.days)
+            expiring_soon = days <= _EXPIRY_WARNING_DAYS
+        return cls(
+            id=key.id,
+            name=key.name,
+            is_active=key.is_active,
+            rate_limit_per_minute=key.rate_limit_per_minute,
+            rate_limit_per_hour=key.rate_limit_per_hour,
+            created_at=key.created_at,
+            expires_at=key.expires_at,
+            last_used_at=key.last_used_at,
+            days_until_expiry=days,
+            is_expiring_soon=expiring_soon,
+        )
 
 
 class APIKeyCreateResponse(BaseModel):
@@ -485,7 +514,7 @@ async def create_new_api_key(
 
     return APIKeyCreateResponse(
         api_key=raw_key,
-        key_info=APIKeyResponse.from_orm(api_key_obj)
+        key_info=APIKeyResponse.from_api_key(api_key_obj)
     )
 
 
@@ -516,7 +545,7 @@ async def list_api_keys(
     keys = query.order_by(APIKey.created_at.desc()).all()
 
     return APIKeyListResponse(
-        keys=[APIKeyResponse.from_orm(key) for key in keys],
+        keys=[APIKeyResponse.from_api_key(key) for key in keys],
         total=len(keys)
     )
 
@@ -607,7 +636,7 @@ async def update_api_key(
     db.commit()
     db.refresh(key)
 
-    return APIKeyResponse.from_orm(key)
+    return APIKeyResponse.from_api_key(key)
 
 
 @router.post(
@@ -647,7 +676,7 @@ async def activate_api_key(
     db.commit()
     db.refresh(key)
 
-    return APIKeyResponse.from_orm(key)
+    return APIKeyResponse.from_api_key(key)
 
 
 @router.get(

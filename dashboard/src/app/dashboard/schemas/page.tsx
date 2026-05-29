@@ -28,12 +28,11 @@ export default function SchemasPage() {
     setTimeout(() => setCopiedId(null), 2000)
   }
 
-  // SWR data fetching with auto-revalidation
   const { data, error, isLoading, mutate } = useSWR(
     isAuthenticated ? ['schemas', activeOnly] : null,
     () => apiClient.listSchemas(activeOnly),
     {
-      refreshInterval: 30000, // Refresh every 30 seconds
+      refreshInterval: 30000,
       revalidateOnFocus: true,
       onError: (err) => {
         toast.error(err instanceof Error ? err.message : 'Failed to load schemas')
@@ -42,7 +41,7 @@ export default function SchemasPage() {
   )
 
   const handleUploadSuccess = () => {
-    mutate() // Revalidate data after upload
+    mutate()
     toast.success('Schema uploaded successfully!')
   }
 
@@ -52,19 +51,16 @@ export default function SchemasPage() {
 
   const schemas = data?.schemas || []
 
-  // Filter schemas based on search query
   const filteredSchemas = schemas.filter(schema =>
     schema.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     schema.db_type.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
-  // Pagination
   const totalPages = Math.ceil(filteredSchemas.length / ITEMS_PER_PAGE)
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE
   const endIndex = startIndex + ITEMS_PER_PAGE
   const paginatedSchemas = filteredSchemas.slice(startIndex, endIndex)
 
-  // Reset to page 1 when search changes
   const handleSearch = (query: string) => {
     setSearchQuery(query)
     setCurrentPage(1)
@@ -72,59 +68,57 @@ export default function SchemasPage() {
 
   return (
     <DashboardLayout>
-      <div className="px-4 py-8">
-        <div className="flex justify-between items-center mb-8">
+      <div>
+        {/* ── Header ── */}
+        <div className="flex justify-between items-start mb-8">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900 flex items-center">
-              <Database className="w-8 h-8 mr-3 text-blue-600" />
+            <h1 className="text-4xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-3 mb-1.5">
+              <Database className="w-9 h-9 text-blue-600 dark:text-blue-400" />
               Database Schemas
             </h1>
-            <p className="text-gray-600 mt-2">
+            <p className="text-slate-500 dark:text-slate-400 text-lg">
               Manage your database schemas and AI enrichment
             </p>
           </div>
-          <div className="text-sm text-gray-500">
+          <div className="text-sm text-slate-500 dark:text-slate-400 pt-2">
             {schemas.length} {schemas.length === 1 ? 'schema' : 'schemas'}
           </div>
         </div>
 
-        {/* Upload Section */}
+        {/* ── Upload ── */}
         <div className="mb-8">
           <SchemaUpload onUploadSuccess={handleUploadSuccess} />
         </div>
 
-        {/* Search and Filters */}
-        <div className="mb-6 flex items-center space-x-4">
+        {/* ── Search & Filters ── */}
+        <div className="mb-5 flex items-center gap-4">
           <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 pointer-events-none" />
             <input
               type="text"
-              placeholder="Search schemas by name or database type..."
+              placeholder="Search schemas by name or database type…"
               value={searchQuery}
               onChange={(e) => handleSearch(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full pl-10 pr-4 py-2.5 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition text-[0.9375rem]"
             />
           </div>
-          <label className="flex items-center space-x-2 text-sm text-gray-700 cursor-pointer">
+          <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer whitespace-nowrap">
             <input
               type="checkbox"
               checked={activeOnly}
-              onChange={(e) => {
-                setActiveOnly(e.target.checked)
-                setCurrentPage(1)
-              }}
-              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              onChange={(e) => { setActiveOnly(e.target.checked); setCurrentPage(1) }}
+              className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500"
             />
-            <span>Active only</span>
+            Active only
           </label>
         </div>
 
-        {/* Schemas List */}
-        <div className="bg-white rounded-lg shadow">
-          <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-            <h2 className="text-xl font-semibold text-gray-900">Your Schemas</h2>
+        {/* ── Schema List ── */}
+        <div className="bg-white dark:bg-slate-800/70 rounded-2xl border border-slate-100 dark:border-slate-700/50">
+          <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700/50 flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Your Schemas</h2>
             {searchQuery && (
-              <span className="text-sm text-gray-500">
+              <span className="text-sm text-slate-500 dark:text-slate-400">
                 {filteredSchemas.length} {filteredSchemas.length === 1 ? 'result' : 'results'}
               </span>
             )}
@@ -133,58 +127,60 @@ export default function SchemasPage() {
           {isLoading ? (
             <LoadingSkeleton />
           ) : error ? (
-            <div className="px-6 py-8 text-center">
+            <div className="px-6 py-10 text-center">
               <AlertCircle className="w-12 h-12 text-red-400 mx-auto mb-3" />
-              <p className="text-red-600">Failed to load schemas</p>
+              <p className="text-red-600 dark:text-red-400">Failed to load schemas</p>
             </div>
           ) : filteredSchemas.length === 0 ? (
-            <div className="px-6 py-12 text-center">
-              <Database className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-              <p className="text-gray-500 mb-2">
+            <div className="px-6 py-14 text-center">
+              <Database className="w-14 h-14 text-slate-300 dark:text-slate-600 mx-auto mb-4" />
+              <p className="text-slate-500 dark:text-slate-400 mb-1.5">
                 {searchQuery ? 'No schemas match your search' : 'No schemas uploaded yet'}
               </p>
               {!searchQuery && (
-                <p className="text-sm text-gray-400">Upload your first schema above to get started!</p>
+                <p className="text-sm text-slate-400 dark:text-slate-500">
+                  Upload your first schema above to get started!
+                </p>
               )}
             </div>
           ) : (
             <>
-              <div className="divide-y divide-gray-200">
+              <div className="divide-y divide-slate-100 dark:divide-slate-700/50">
                 {paginatedSchemas.map((schema) => (
                   <Link
                     key={schema.id}
                     href={`/dashboard/schemas/${schema.id}`}
-                    className="block px-6 py-4 hover:bg-gray-50 transition-colors group"
+                    className="block px-6 py-4 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors group"
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-start space-x-4">
-                        <div className="mt-1">
-                          <Database className="w-6 h-6 text-blue-600 group-hover:text-blue-700" />
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-start gap-4 min-w-0">
+                        <div className="mt-1 flex-shrink-0">
+                          <Database className="w-5 h-5 text-blue-600 dark:text-blue-400 group-hover:text-blue-700 dark:group-hover:text-blue-300 transition-colors" />
                         </div>
-                        <div>
-                          <h3 className="text-lg font-medium text-gray-900 group-hover:text-blue-600">
+                        <div className="min-w-0">
+                          <h3 className="text-base font-medium text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors truncate">
                             {schema.name}
                           </h3>
-                          <div className="flex items-center space-x-3 mt-1">
-                            <span className="text-sm text-gray-500">
-                              <span className="font-medium">{schema.db_type.toUpperCase()}</span>
+                          <div className="flex items-center gap-2.5 mt-1 flex-wrap">
+                            <span className="text-sm font-medium text-slate-600 dark:text-slate-400">
+                              {schema.db_type.toUpperCase()}
                             </span>
-                            <span className="text-gray-300">•</span>
-                            <span className="text-sm text-gray-500">
+                            <span className="text-slate-300 dark:text-slate-600">•</span>
+                            <span className="text-sm text-slate-500 dark:text-slate-400">
                               {schema.table_count} {schema.table_count === 1 ? 'table' : 'tables'}
                             </span>
-                            <span className="text-gray-300">•</span>
-                            <span className="text-sm text-gray-400">
+                            <span className="text-slate-300 dark:text-slate-600">•</span>
+                            <span className="text-sm text-slate-400 dark:text-slate-500">
                               {new Date(schema.created_at).toLocaleDateString()}
                             </span>
                           </div>
-                          <div className="flex items-center gap-1.5 mt-2">
-                            <code className="font-mono text-xs text-gray-400 select-all">
+                          <div className="flex items-center gap-1.5 mt-1.5">
+                            <code className="font-mono text-xs text-slate-400 dark:text-slate-500 select-all">
                               {schema.id}
                             </code>
                             <button
                               onClick={(e) => handleCopyId(e, schema.id)}
-                              className="text-gray-400 hover:text-gray-600 transition-colors shrink-0"
+                              className="text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors flex-shrink-0"
                               title="Copy schema ID"
                             >
                               {copiedId === schema.id
@@ -193,25 +189,26 @@ export default function SchemasPage() {
                             </button>
                           </div>
                           {schema.enriched_description && (
-                            <p className="text-sm text-gray-600 mt-2 line-clamp-2">
+                            <p className="text-sm text-slate-600 dark:text-slate-400 mt-1.5 line-clamp-2">
                               {schema.enriched_description}
                             </p>
                           )}
                         </div>
                       </div>
-                      <div className="text-right">
+
+                      <div className="text-right flex-shrink-0">
                         {schema.enrichment_status === 'failed' ? (
-                          <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800">
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400">
                             <AlertCircle className="w-3 h-3 mr-1" />
-                            Enrichment Failed
+                            Failed
                           </span>
                         ) : schema.enriched_description ? (
-                          <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800">
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400">
                             <Sparkles className="w-3 h-3 mr-1" />
                             Enriched
                           </span>
                         ) : (schema.enrichment_status === 'pending' || schema.enrichment_status === 'running') ? (
-                          <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-amber-100 text-amber-800">
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400">
                             <svg className="animate-spin w-3 h-3 mr-1.5" viewBox="0 0 24 24" fill="none">
                               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
@@ -219,7 +216,7 @@ export default function SchemasPage() {
                             Enriching…
                           </span>
                         ) : (
-                          <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-yellow-100 text-yellow-800">
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-400">
                             <AlertCircle className="w-3 h-3 mr-1" />
                             Not Enriched
                           </span>
@@ -232,28 +229,28 @@ export default function SchemasPage() {
 
               {/* Pagination */}
               {totalPages > 1 && (
-                <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
-                  <div className="text-sm text-gray-500">
-                    Showing {startIndex + 1}-{Math.min(endIndex, filteredSchemas.length)} of {filteredSchemas.length}
+                <div className="px-6 py-4 border-t border-slate-100 dark:border-slate-700/50 flex items-center justify-between">
+                  <div className="text-sm text-slate-500 dark:text-slate-400">
+                    Showing {startIndex + 1}–{Math.min(endIndex, filteredSchemas.length)} of {filteredSchemas.length}
                   </div>
-                  <div className="flex items-center space-x-2">
+                  <div className="flex items-center gap-1.5">
                     <button
                       onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                       disabled={currentPage === 1}
-                      className="inline-flex items-center px-3 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="inline-flex items-center px-3 py-1.5 border border-slate-200 dark:border-slate-600 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                     >
                       <ChevronLeft className="w-4 h-4 mr-1" />
                       Previous
                     </button>
-                    <div className="flex items-center space-x-1">
+                    <div className="flex items-center gap-1">
                       {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
                         <button
                           key={page}
                           onClick={() => setCurrentPage(page)}
-                          className={`px-3 py-1 rounded-md text-sm font-medium ${
+                          className={`w-8 h-8 rounded-lg text-sm font-medium transition-colors ${
                             currentPage === page
-                              ? 'bg-blue-600 text-white'
-                              : 'text-gray-700 hover:bg-gray-100'
+                              ? 'bg-blue-600 text-white shadow-sm'
+                              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700'
                           }`}
                         >
                           {page}
@@ -263,7 +260,7 @@ export default function SchemasPage() {
                     <button
                       onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                       disabled={currentPage === totalPages}
-                      className="inline-flex items-center px-3 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="inline-flex items-center px-3 py-1.5 border border-slate-200 dark:border-slate-600 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                     >
                       Next
                       <ChevronRight className="w-4 h-4 ml-1" />
@@ -279,21 +276,20 @@ export default function SchemasPage() {
   )
 }
 
-// Loading skeleton
 function LoadingSkeleton() {
   return (
-    <div className="divide-y divide-gray-200">
+    <div className="divide-y divide-slate-100 dark:divide-slate-700/50">
       {[1, 2, 3].map((i) => (
         <div key={i} className="px-6 py-4 animate-pulse">
           <div className="flex items-center justify-between">
-            <div className="flex items-start space-x-4 flex-1">
-              <div className="w-6 h-6 bg-gray-200 rounded"></div>
+            <div className="flex items-start gap-4 flex-1">
+              <div className="w-5 h-5 bg-slate-200 dark:bg-slate-700 rounded mt-1"></div>
               <div className="flex-1">
-                <div className="h-5 bg-gray-200 rounded w-1/3 mb-2"></div>
-                <div className="h-4 bg-gray-200 rounded w-1/2"></div>
+                <div className="h-5 bg-slate-200 dark:bg-slate-700 rounded w-1/3 mb-2"></div>
+                <div className="h-4 bg-slate-200 dark:bg-slate-700 rounded w-1/2"></div>
               </div>
             </div>
-            <div className="h-6 bg-gray-200 rounded w-24"></div>
+            <div className="h-6 bg-slate-200 dark:bg-slate-700 rounded w-20"></div>
           </div>
         </div>
       ))}

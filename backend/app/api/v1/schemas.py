@@ -7,11 +7,13 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from fastapi import Request
 from app.db.database import SessionLocal, get_db
 from app.core.dependencies import CurrentCompany, CurrentCompanyEither
 from app.services.schema_service import SchemaService
 from app.services.enrichment_service import EnrichmentService
-from app.models import Schema, SchemaTable, SchemaColumn
+from app.services.audit_service import AuditService, AuditAction
+from app.models import Schema, SchemaTable, SchemaColumn, EnrichmentStatus, DescriptionSource
 
 router = APIRouter(prefix="/schemas", tags=["Schemas"])
 
@@ -25,34 +27,54 @@ async def _enrich_in_background(schema_id: str) -> None:
     Runs after the upload response is already sent so the user is never blocked.
     Sets enrichment_status to 'running' → 'complete' or 'failed' so the UI
     can surface the result instead of spinning indefinitely.
+    Fires webhooks on completion or failure.
     """
+    from app.services.webhook_service import WebhookService
+
     db = SessionLocal()
     try:
         # Mark as running so the UI knows enrichment has started
         schema = db.query(Schema).filter(Schema.id == schema_id).first()
-        if schema:
-            schema.enrichment_status = 'running'
-            schema.enrichment_error = None
-            db.commit()
+        if not schema:
+            return
+        company_id   = schema.company_id
+        schema_name  = schema.name
+        schema.enrichment_status = EnrichmentStatus.RUNNING
+        schema.enrichment_error = None
+        db.commit()
 
         enrichment_service = EnrichmentService()
         await enrichment_service.enrich_schema(db=db, schema_id=schema_id)
 
-        # Mark complete (enrichment_service already committed enriched_at)
+        # Mark complete
         schema = db.query(Schema).filter(Schema.id == schema_id).first()
         if schema:
-            schema.enrichment_status = 'complete'
+            schema.enrichment_status = EnrichmentStatus.COMPLETE
             db.commit()
 
         _log.info("Background enrichment complete", schema_id=schema_id)
+
+        await WebhookService.deliver_event(
+            db=db,
+            company_id=company_id,
+            event="schema.enrichment.complete",
+            data={"schema_id": schema_id, "schema_name": schema_name},
+        )
+
     except Exception as exc:
         _log.error("Background enrichment failed", schema_id=schema_id, error=str(exc))
         try:
             schema = db.query(Schema).filter(Schema.id == schema_id).first()
             if schema:
-                schema.enrichment_status = 'failed'
+                schema.enrichment_status = EnrichmentStatus.FAILED
                 schema.enrichment_error = str(exc)[:500]
                 db.commit()
+                await WebhookService.deliver_event(
+                    db=db,
+                    company_id=schema.company_id,
+                    event="schema.enrichment.failed",
+                    data={"schema_id": schema_id, "error": str(exc)[:200]},
+                )
         except Exception:
             pass  # Don't let error-handling itself blow up
     finally:
@@ -130,7 +152,7 @@ class SchemaResponse(BaseModel):
     enriched_description: Optional[str]
     table_count: int
     enriched_at: Optional[str] = None
-    enrichment_status: str = 'pending'   # 'pending' | 'running' | 'complete' | 'failed'
+    enrichment_status: EnrichmentStatus = EnrichmentStatus.PENDING
     enrichment_error: Optional[str] = None
 
     class Config:
@@ -160,6 +182,7 @@ async def upload_schema(
     schema_data: SchemaUploadRequest,
     background_tasks: BackgroundTasks,
     company: CurrentCompanyEither,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     """
@@ -231,6 +254,16 @@ async def upload_schema(
         # The task creates its own DB session; failures are silent to the caller.
         background_tasks.add_task(_enrich_in_background, str(schema.id))
 
+        AuditService.log(
+            db=db,
+            company_id=company.id,
+            action=AuditAction.SCHEMA_UPLOAD,
+            resource_type="schema",
+            resource_id=schema.id,
+            details={"name": schema.name, "db_type": schema.db_type.value, "format": fmt},
+            request=request,
+        )
+
         return SchemaResponse(
             id=schema.id,
             name=schema.name,
@@ -240,7 +273,7 @@ async def upload_schema(
             enriched_description=schema.enriched_description,
             enriched_at=schema.enriched_at.isoformat() if schema.enriched_at else None,
             table_count=len(schema.tables),
-            enrichment_status=schema.enrichment_status or 'pending',
+            enrichment_status=schema.enrichment_status or EnrichmentStatus.PENDING,
             enrichment_error=schema.enrichment_error,
         )
 
@@ -252,9 +285,10 @@ async def upload_schema(
             detail=str(e)
         )
     except Exception as e:
+        _log.error("Schema parse failed", error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to parse schema: {str(e)}"
+            detail="Failed to parse schema. Check your DDL syntax and try again."
         )
 
 
@@ -293,7 +327,7 @@ async def list_schemas(
             enriched_description=s.enriched_description,
             enriched_at=s.enriched_at.isoformat() if s.enriched_at else None,
             table_count=len(s.tables),
-            enrichment_status=s.enrichment_status or 'pending',
+            enrichment_status=s.enrichment_status or EnrichmentStatus.PENDING,
             enrichment_error=s.enrichment_error,
         )
         for s in schemas
@@ -342,7 +376,7 @@ async def get_schema(
     tables_response = []
     for table in schema.tables:
         columns_response = [
-            ColumnResponse.from_orm(col)
+            ColumnResponse.model_validate(col)
             for col in table.columns
         ]
 
@@ -368,7 +402,7 @@ async def get_schema(
         tables=tables_response,
         raw_ddl_text=schema.raw_ddl_text,
         schema_format=schema.schema_format,
-        enrichment_status=schema.enrichment_status or 'pending',
+        enrichment_status=schema.enrichment_status or EnrichmentStatus.PENDING,
         enrichment_error=schema.enrichment_error,
     )
 
@@ -381,6 +415,7 @@ async def get_schema(
 async def delete_schema(
     schema_id: UUID,
     company: CurrentCompanyEither,
+    request: Request,
     db: Session = Depends(get_db)
 ):
     """
@@ -407,6 +442,15 @@ async def delete_schema(
             detail="Schema not found"
         )
 
+    AuditService.log(
+        db=db,
+        company_id=company.id,
+        action=AuditAction.SCHEMA_DELETE,
+        resource_type="schema",
+        resource_id=schema_id,
+        request=request,
+    )
+
     return None
 
 
@@ -430,7 +474,7 @@ async def update_schema_description(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
 
     schema.enriched_description = body.enriched_description
-    schema.description_source = "user"
+    schema.description_source = DescriptionSource.USER
     db.commit()
     db.refresh(schema)
 
@@ -475,7 +519,7 @@ async def update_table_description(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Table not found")
 
     table.enriched_description = body.enriched_description
-    table.description_source = "user"
+    table.description_source = DescriptionSource.USER
     db.commit()
     db.refresh(table)
 
@@ -484,7 +528,7 @@ async def update_table_description(
         name=table.name,
         enriched_description=table.enriched_description,
         description_source=table.description_source,
-        columns=[ColumnResponse.from_orm(c) for c in table.columns],
+        columns=[ColumnResponse.model_validate(c) for c in table.columns],
     )
 
 
@@ -526,11 +570,11 @@ async def update_column_description(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Column not found")
 
     column.enriched_description = body.enriched_description
-    column.description_source = "user"
+    column.description_source = DescriptionSource.USER
     db.commit()
     db.refresh(column)
 
-    return ColumnResponse.from_orm(column)
+    return ColumnResponse.model_validate(column)
 
 
 @router.post(
@@ -601,7 +645,8 @@ async def enrich_schema(
             detail=str(e)
         )
     except Exception as e:
+        _log.error("Schema enrichment failed", schema_id=str(schema_id), error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to enrich schema: {str(e)}"
+            detail="Failed to enrich schema. Please try again."
         )

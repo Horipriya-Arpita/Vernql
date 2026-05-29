@@ -18,6 +18,20 @@ class DatabaseType(str, enum.Enum):
     MYSQL = "mysql"
 
 
+class EnrichmentStatus(str, enum.Enum):
+    """Lifecycle of AI schema enrichment"""
+    PENDING  = "pending"
+    RUNNING  = "running"
+    COMPLETE = "complete"
+    FAILED   = "failed"
+
+
+class DescriptionSource(str, enum.Enum):
+    """Who authored an enriched description"""
+    AI   = "ai"
+    USER = "user"
+
+
 class Schema(Base):
     """
     Database Schema entity

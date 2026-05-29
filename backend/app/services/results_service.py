@@ -6,12 +6,14 @@ from typing import List, Dict, Any, Optional
 from uuid import UUID
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
+import json
 import structlog
 
 
 from app.models.query_result import QueryResult
 from app.models.query import Query
 from app.services.visualization_service import VisualizationService
+from app.core.config import settings
 
 logger = structlog.get_logger()
 
@@ -58,8 +60,26 @@ class ResultsService:
             if not query:
                 raise ValueError(f"Query {query_id} not found or access denied")
 
-            # Calculate metadata
+            # Enforce row count limit
             row_count = len(results_data)
+            if row_count > settings.RESULT_MAX_ROWS:
+                raise ValueError(
+                    f"Result set exceeds the maximum allowed row count of "
+                    f"{settings.RESULT_MAX_ROWS:,} rows (received {row_count:,}). "
+                    "Apply a LIMIT clause to reduce the result size."
+                )
+
+            # Enforce payload size limit
+            result_bytes = len(json.dumps(results_data, default=str).encode("utf-8"))
+            result_size_mb = result_bytes / (1024 * 1024)
+            if result_size_mb > settings.RESULT_MAX_SIZE_MB:
+                raise ValueError(
+                    f"Result payload size ({result_size_mb:.1f} MB) exceeds the maximum "
+                    f"allowed size of {settings.RESULT_MAX_SIZE_MB} MB. "
+                    "Reduce the number of rows or columns returned."
+                )
+
+            # Calculate metadata
             column_count = len(results_data[0].keys()) if results_data else 0
 
             # Auto-detect chart type
@@ -200,7 +220,8 @@ class ResultsService:
         self,
         result_id: UUID,
         company_id: UUID,
-        is_public: bool = True
+        is_public: bool = True,
+        share_expires_at=None,
     ) -> Optional[QueryResult]:
         """
         Make a query result public or private
@@ -224,6 +245,10 @@ class ResultsService:
                 return None
 
             result.is_public = is_public
+            if is_public:
+                result.share_expires_at = share_expires_at
+            else:
+                result.share_expires_at = None  # clear expiry when making private
             self.db.commit()
             self.db.refresh(result)
 

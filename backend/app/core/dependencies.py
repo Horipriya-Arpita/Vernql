@@ -12,6 +12,7 @@ from app.db.database import get_db
 from app.core.security import verify_api_key
 from app.core.jwt import verify_token
 from app.models import Company, APIKey, User
+from app.models.user import UserRole, user_has_role
 
 logger = structlog.get_logger()
 
@@ -252,3 +253,28 @@ CurrentAuth = Annotated[tuple[Company, APIKey], Depends(get_current_company)]
 CurrentUser = Annotated[User, Depends(get_current_active_user)]
 # Unified authentication - accepts JWT or API key
 CurrentCompanyEither = Annotated[Company, Depends(get_company_from_either_auth)]
+
+
+def require_role(minimum_role: UserRole):
+    """
+    Dependency factory — gates an endpoint to users with at least `minimum_role`.
+
+    Usage::
+
+        @router.delete("/{id}")
+        async def delete_something(
+            user: User = Depends(require_role(UserRole.ADMIN)),
+        ):
+            ...
+    """
+    async def _checker(user: User = Depends(get_current_active_user)) -> User:
+        if not user_has_role(user, minimum_role):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"This action requires the '{minimum_role.value}' role or higher. "
+                    f"Your current role is '{user.role}'."
+                ),
+            )
+        return user
+    return _checker

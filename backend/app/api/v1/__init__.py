@@ -3,7 +3,7 @@ API v1 Router
 Aggregates all v1 endpoints
 """
 from fastapi import APIRouter
-from app.api.v1 import auth, schemas, queries, integrations, visualizations, sessions
+from app.api.v1 import auth, schemas, queries, integrations, visualizations, sessions, audit, webhooks
 
 # Create main router
 router = APIRouter()
@@ -15,6 +15,8 @@ router.include_router(queries.router)
 router.include_router(integrations.router)
 router.include_router(visualizations.router)
 router.include_router(sessions.router)
+router.include_router(audit.router)
+router.include_router(webhooks.router)
 
 # Placeholder endpoints
 @router.get("/ping")

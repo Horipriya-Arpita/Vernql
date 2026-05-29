@@ -14,8 +14,15 @@ export default function ApiKeysPage() {
 
   return (
     <DashboardLayout>
-      <div className="px-4 py-8">
-        <h1 className="text-3xl font-bold text-gray-900 mb-8">API Key Management</h1>
+      <div>
+        <div className="mb-8">
+          <h1 className="text-4xl font-bold text-slate-900 dark:text-white tracking-tight mb-1.5">
+            API Key Management
+          </h1>
+          <p className="text-slate-500 dark:text-slate-400 text-lg">
+            Generate and manage API keys for your applications
+          </p>
+        </div>
         <ApiKeyManager />
       </div>
     </DashboardLayout>

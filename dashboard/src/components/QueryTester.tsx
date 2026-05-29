@@ -4,6 +4,9 @@ import { useState, useEffect } from 'react'
 import { apiClient } from '@/lib/api-client'
 import type { Schema, Query } from '@/lib/types'
 
+const inputClass =
+  'w-full px-4 py-2.5 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-700/50 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition text-[0.9375rem]'
+
 export default function QueryTester() {
   const [schemas, setSchemas] = useState<Schema[]>([])
   const [selectedSchemaId, setSelectedSchemaId] = useState('')
@@ -43,21 +46,18 @@ export default function QueryTester() {
     e.preventDefault()
     setError('')
     setResult(null)
-
     if (!question.trim() || !selectedSchemaId) {
       setError('Please select a schema and enter a question')
       return
     }
-
     try {
       setLoading(true)
       const query = await apiClient.generateSQL({
         query: question.trim(),
         schema_id: selectedSchemaId,
       })
-
       setResult(query)
-      loadHistory() // Refresh history
+      loadHistory()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to generate SQL')
     } finally {
@@ -72,11 +72,7 @@ export default function QueryTester() {
         is_correct: isCorrect,
         feedback_notes: isCorrect ? 'Correct' : 'Incorrect',
       })
-
-      // Update the result to show feedback was submitted
-      if (result && result.id === queryId) {
-        setResult({ ...result })
-      }
+      if (result && result.id === queryId) setResult({ ...result })
     } catch (err) {
       console.error('Failed to submit feedback:', err)
     }
@@ -91,63 +87,59 @@ export default function QueryTester() {
 
   return (
     <div className="space-y-6">
-      {/* Query Form */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-semibold text-gray-900 mb-4">Test Your Queries</h2>
+
+      {/* ── Query form ── */}
+      <div className="bg-white dark:bg-slate-800/70 rounded-2xl border border-slate-100 dark:border-slate-700/50 p-6">
+        <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-5">Test Your Queries</h2>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label htmlFor="schema" className="block text-sm font-medium text-gray-700 mb-2">
+            <label htmlFor="schema" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
               Select Schema
             </label>
             <select
-              id="schema"
-              value={selectedSchemaId}
+              id="schema" value={selectedSchemaId}
               onChange={(e) => setSelectedSchemaId(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className={inputClass}
             >
-              {schemas.length === 0 ? (
-                <option value="">No schemas available</option>
-              ) : (
-                schemas.map((schema) => (
-                  <option key={schema.id} value={schema.id}>
-                    {schema.name} ({schema.db_type.toUpperCase()})
-                  </option>
-                ))
-              )}
+              {schemas.length === 0
+                ? <option value="">No schemas available</option>
+                : schemas.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.db_type.toUpperCase()})
+                    </option>
+                  ))}
             </select>
           </div>
 
           <div>
-            <label htmlFor="question" className="block text-sm font-medium text-gray-700 mb-2">
+            <label htmlFor="question" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
               Natural Language Question
             </label>
             <textarea
-              id="question"
-              value={question}
+              id="question" value={question}
               onChange={(e) => setQuestion(e.target.value)}
               placeholder="e.g., Show me all users who signed up in the last 30 days"
               rows={3}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full px-4 py-2.5 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-700/50 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition resize-none text-[0.9375rem]"
             />
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <span className="text-sm text-gray-600 mr-2">Try:</span>
-            {exampleQuestions.map((example, index) => (
+          {/* Example prompts */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm text-slate-500 dark:text-slate-400">Try:</span>
+            {exampleQuestions.map((ex, i) => (
               <button
-                key={index}
-                type="button"
-                onClick={() => setQuestion(example)}
-                className="text-sm bg-gray-100 text-gray-700 px-3 py-1 rounded hover:bg-gray-200 transition-colors"
+                key={i} type="button" onClick={() => setQuestion(ex)}
+                className="text-sm bg-slate-100 dark:bg-slate-700/50 text-slate-700 dark:text-slate-300 px-3 py-1 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
               >
-                {example}
+                {ex}
               </button>
             ))}
           </div>
 
           {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 text-red-700 dark:text-red-400 px-4 py-3 rounded-xl text-sm">
               {error}
             </div>
           )}
@@ -155,63 +147,57 @@ export default function QueryTester() {
           <button
             type="submit"
             disabled={loading || !selectedSchemaId || !question.trim()}
-            className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 px-4 rounded-xl font-semibold text-sm shadow-blue-sm disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {loading ? 'Generating SQL...' : 'Generate SQL'}
+            {loading ? 'Generating SQL…' : 'Generate SQL'}
           </button>
         </form>
       </div>
 
-      {/* Result */}
+      {/* ── Result ── */}
       {result && (
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-gray-900">Generated SQL</h3>
-            <div className="flex items-center space-x-2">
-              <span className="text-sm text-gray-600">Confidence:</span>
-              <span
-                className={`px-3 py-1 rounded-full text-sm font-medium ${
-                  result.confidence_score >= 0.8
-                    ? 'bg-green-100 text-green-800'
-                    : result.confidence_score >= 0.6
-                    ? 'bg-yellow-100 text-yellow-800'
-                    : 'bg-red-100 text-red-800'
-                }`}
-              >
+        <div className="bg-white dark:bg-slate-800/70 rounded-2xl border border-slate-100 dark:border-slate-700/50 p-6">
+          <div className="flex items-center justify-between mb-5">
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Generated SQL</h3>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-slate-500 dark:text-slate-400">Confidence:</span>
+              <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                result.confidence_score >= 0.8
+                  ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                  : result.confidence_score >= 0.6
+                  ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400'
+                  : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+              }`}>
                 {(result.confidence_score * 100).toFixed(0)}%
               </span>
             </div>
           </div>
 
-          <div className="bg-gray-50 rounded-lg p-4 mb-4">
-            <pre className="text-sm font-mono whitespace-pre-wrap overflow-x-auto">
-              {result.generated_sql}
-            </pre>
-          </div>
+          <pre className="bg-slate-900 dark:bg-slate-950 text-slate-100 p-4 rounded-xl text-sm font-mono whitespace-pre-wrap overflow-x-auto mb-5 leading-relaxed border border-slate-800">
+            {result.generated_sql}
+          </pre>
 
           {result.warnings && result.warnings.length > 0 && (
-            <div className="mb-4 p-4 bg-yellow-50 rounded-lg">
-              <h4 className="text-sm font-semibold text-gray-900 mb-2">Warnings</h4>
-              <ul className="text-sm text-gray-700 list-disc list-inside">
-                {result.warnings.map((warning, idx) => (
-                  <li key={idx}>{warning}</li>
-                ))}
+            <div className="mb-5 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800/40 rounded-xl">
+              <h4 className="text-sm font-semibold text-slate-900 dark:text-white mb-2">Warnings</h4>
+              <ul className="text-sm text-slate-700 dark:text-slate-300 list-disc list-inside space-y-1">
+                {result.warnings.map((w, i) => <li key={i}>{w}</li>)}
               </ul>
             </div>
           )}
 
-          <div className="flex items-center justify-between pt-4 border-t border-gray-200">
-            <span className="text-sm text-gray-600">Was this SQL query correct?</span>
-            <div className="flex space-x-3">
+          <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-slate-700/50">
+            <span className="text-sm text-slate-600 dark:text-slate-400">Was this SQL query correct?</span>
+            <div className="flex gap-2">
               <button
                 onClick={() => handleFeedback(result.id, true)}
-                className="px-4 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors text-sm font-medium"
+                className="px-4 py-1.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-lg hover:bg-green-200 dark:hover:bg-green-900/50 text-sm font-medium transition-colors"
               >
                 Yes
               </button>
               <button
                 onClick={() => handleFeedback(result.id, false)}
-                className="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors text-sm font-medium"
+                className="px-4 py-1.5 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50 text-sm font-medium transition-colors"
               >
                 No
               </button>
@@ -220,28 +206,26 @@ export default function QueryTester() {
         </div>
       )}
 
-      {/* Query History */}
+      {/* ── Query history ── */}
       {history.length > 0 && (
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Recent Queries</h3>
+        <div className="bg-white dark:bg-slate-800/70 rounded-2xl border border-slate-100 dark:border-slate-700/50 p-6">
+          <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-5">Recent Queries</h3>
           <div className="space-y-3">
             {history.map((query) => (
-              <div key={query.id} className="border border-gray-200 rounded-lg p-4">
-                <div className="flex items-start justify-between mb-2">
-                  <p className="text-sm font-medium text-gray-900">{query.natural_language_query}</p>
-                  <span
-                    className={`px-2 py-1 rounded text-xs font-medium ${
-                      query.confidence_score >= 0.8
-                        ? 'bg-green-100 text-green-800'
-                        : query.confidence_score >= 0.6
-                        ? 'bg-yellow-100 text-yellow-800'
-                        : 'bg-red-100 text-red-800'
-                    }`}
-                  >
+              <div key={query.id} className="border border-slate-200 dark:border-slate-700/50 rounded-xl p-4">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <p className="text-sm font-medium text-slate-900 dark:text-white">{query.natural_language_query}</p>
+                  <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${
+                    query.confidence_score >= 0.8
+                      ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                      : query.confidence_score >= 0.6
+                      ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400'
+                      : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+                  }`}>
                     {(query.confidence_score * 100).toFixed(0)}%
                   </span>
                 </div>
-                <pre className="text-xs font-mono text-gray-600 bg-gray-50 p-2 rounded overflow-x-auto">
+                <pre className="text-xs font-mono text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-700/30 p-3 rounded-lg overflow-x-auto">
                   {query.generated_sql}
                 </pre>
               </div>
@@ -249,6 +233,7 @@ export default function QueryTester() {
           </div>
         </div>
       )}
+
     </div>
   )
 }

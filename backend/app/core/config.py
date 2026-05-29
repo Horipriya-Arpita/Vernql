@@ -3,8 +3,11 @@ Application Configuration
 Manages environment variables and settings
 """
 from pydantic_settings import BaseSettings
+from pydantic import model_validator
 from typing import List, Optional
 from functools import lru_cache
+
+_INSECURE_SECRET_KEY = "your-secret-key-change-this-in-production"
 
 
 class Settings(BaseSettings):
@@ -66,6 +69,10 @@ class Settings(BaseSettings):
     SCHEMA_MAX_SIZE_MB: int = 10
     SCHEMA_ENRICHMENT_BATCH_SIZE: int = 20
 
+    # Query results — prevent oversized payloads from exhausting DB/memory
+    RESULT_MAX_ROWS: int = 10000        # max rows per result set
+    RESULT_MAX_SIZE_MB: float = 50.0    # max serialized JSON size in MB
+
     # Query
     QUERY_HISTORY_RETENTION_DAYS: int = 90
     QUERY_MAX_EXECUTION_TIME_MS: int = 30000
@@ -73,6 +80,21 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = "INFO"
     SENTRY_DSN: Optional[str] = None
+
+    @model_validator(mode='after')
+    def validate_secrets(self) -> 'Settings':
+        """Prevent unsafe defaults from reaching production or staging."""
+        if self.ENVIRONMENT in ("production", "staging"):
+            if self.SECRET_KEY == _INSECURE_SECRET_KEY:
+                raise ValueError(
+                    "SECRET_KEY must be changed from the default value before deploying. "
+                    "Generate one with: openssl rand -hex 32"
+                )
+            if self.DEBUG:
+                raise ValueError(
+                    "DEBUG must be False in production/staging environments."
+                )
+        return self
 
     class Config:
         env_file = ".env"

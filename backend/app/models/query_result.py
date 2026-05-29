@@ -83,6 +83,11 @@ class QueryResult(Base):
         nullable=False,
         comment="Whether this visualization is publicly shareable"
     )
+    share_expires_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When the public share link expires. NULL = never expires.",
+    )
 
     # Timestamps
     created_at = Column(

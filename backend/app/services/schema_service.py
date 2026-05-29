@@ -3,7 +3,7 @@ Schema Service
 Handles schema parsing and storage
 """
 from typing import Optional
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, subqueryload
 from datetime import datetime, timezone
 import structlog
 
@@ -361,7 +361,10 @@ class SchemaService:
         if active_only:
             query = query.filter(Schema.is_active == True)
 
-        return query.order_by(Schema.created_at.desc()).all()
+        # Eagerly load tables in a single extra query (subqueryload) so that
+        # accessing len(schema.tables) in the route layer doesn't trigger
+        # a separate SELECT per schema (N+1 problem).
+        return query.options(subqueryload(Schema.tables)).order_by(Schema.created_at.desc()).all()
 
     @staticmethod
     def delete_schema(

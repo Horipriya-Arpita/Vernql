@@ -42,40 +42,24 @@ function WidgetContent() {
   >(new Map())
 
   // -------------------------------------------------------------------
-  // Config + client init from URL params
-  // Determines mode: 'proxy' (proxyUrl present) or 'direct' (apiKey+schemaId)
+  // Config + client init
+  //
+  // Mode detection:
+  //   proxy  — proxyUrl param present in URL → initialize immediately
+  //   direct — credentials arrive via 'vernql:init' postMessage from
+  //             embed.js (never put in URL to avoid key exposure).
+  //             Legacy fallback: apiKey+schemaId in URL still accepted
+  //             for backward compatibility / standalone dev testing.
   // -------------------------------------------------------------------
+
+  // Effect 1: non-sensitive URL params + proxy mode
   useEffect(() => {
-    const proxyUrl  = searchParams.get('proxyUrl')
-    const apiKey    = searchParams.get('apiKey')
-    const schemaId  = searchParams.get('schemaId')
-    const apiUrl    = searchParams.get('apiUrl') || 'https://api.vernql.com'
-    const theme     = (searchParams.get('theme') as 'light' | 'dark' | 'auto') || 'auto'
-    const title     = searchParams.get('title')       || undefined
+    const proxyUrl    = searchParams.get('proxyUrl')
+    const theme       = (searchParams.get('theme') as 'light' | 'dark' | 'auto') || 'auto'
+    const title       = searchParams.get('title')       || undefined
     const placeholder = searchParams.get('placeholder') || undefined
 
-    // Need either a proxyUrl (proxy mode) or apiKey+schemaId (direct mode)
-    if (!proxyUrl && (!apiKey || !schemaId)) {
-      setReady(true)
-      return
-    }
-
-    const widgetConfig: WidgetConfig = {
-      proxyUrl:   proxyUrl   || undefined,
-      apiKey:     apiKey     || undefined,
-      schemaId:   schemaId   || undefined,
-      apiUrl,
-      theme,
-      title,
-      placeholder,
-    }
-    setConfig(widgetConfig)
-
-    // Direct mode only — create the API client
-    if (!proxyUrl && apiKey && schemaId) {
-      setApiClient(new VernqlApiClient(apiUrl, apiKey, schemaId))
-    }
-
+    // Apply theme immediately regardless of mode
     const resolvedTheme = getThemePreference(theme)
     if (resolvedTheme === 'dark') {
       document.documentElement.classList.add('dark')
@@ -83,8 +67,55 @@ function WidgetContent() {
       document.documentElement.classList.remove('dark')
     }
 
-    setReady(true)
+    if (proxyUrl) {
+      // Proxy mode — no secrets needed, initialize right away
+      setConfig({ proxyUrl, apiUrl: 'https://api.vernql.com', theme, title, placeholder })
+      setReady(true)
+      return
+    }
+
+    // Legacy direct mode: apiKey/schemaId passed in URL (deprecated, kept for
+    // backward compat and local dev).  When embed.js is used these params are
+    // absent — credentials arrive via postMessage (Effect 2 below).
+    const legacyApiKey   = searchParams.get('apiKey')
+    const legacySchemaId = searchParams.get('schemaId')
+    const legacyApiUrl   = searchParams.get('apiUrl') || 'https://api.vernql.com'
+    if (legacyApiKey && legacySchemaId) {
+      setConfig({ apiKey: legacyApiKey, schemaId: legacySchemaId, apiUrl: legacyApiUrl, theme, title, placeholder })
+      setApiClient(new VernqlApiClient(legacyApiUrl, legacyApiKey, legacySchemaId))
+      setReady(true)
+      return
+    }
+
+    // Secure direct mode: stay in loading state until vernql:init arrives
+    // (Effect 2 will call setReady once credentials are received)
   }, [searchParams])
+
+  // Effect 2: Secure direct mode — receive credentials from embed.js via postMessage.
+  // Keeping this in a separate effect ensures the listener is registered even before
+  // searchParams resolves, so the 'load' event from the parent frame is never missed.
+  useEffect(() => {
+    function handleInitMessage(event: MessageEvent) {
+      if (event.data?.type !== 'vernql:init') return
+      const { apiKey, schemaId, apiUrl = 'https://api.vernql.com' } = event.data as {
+        apiKey?: string; schemaId?: string; apiUrl?: string
+      }
+      if (!apiKey || !schemaId) return
+
+      // Read non-sensitive display params from the current URL
+      const params      = new URLSearchParams(window.location.search)
+      const theme       = (params.get('theme') as 'light' | 'dark' | 'auto') || 'auto'
+      const title       = params.get('title')       || undefined
+      const placeholder = params.get('placeholder') || undefined
+
+      setConfig({ apiKey, schemaId, apiUrl, theme, title, placeholder })
+      setApiClient(new VernqlApiClient(apiUrl, apiKey, schemaId))
+      setReady(true)
+    }
+
+    window.addEventListener('message', handleInitMessage)
+    return () => window.removeEventListener('message', handleInitMessage)
+  }, []) // register once — no deps needed
 
   // -------------------------------------------------------------------
   // Proxy mode — listen for postMessage replies from the host page.
@@ -196,7 +227,16 @@ function WidgetContent() {
           const messageId = generateId()
 
           const visualization = await new Promise<ProxyVisualization>((resolve, reject) => {
-            pendingRef.current.set(messageId, { resolve, reject })
+            pendingRef.current.set(messageId, {
+              resolve: (v) => {
+                if (!v || !v.chart_type) {
+                  reject(new Error('Invalid response from host page'))
+                  return
+                }
+                resolve(v)
+              },
+              reject,
+            })
 
             // Ask the parent (host page, e.g. ShopMetrics) to run the query.
             // embed.js running in the host page listens for this message,

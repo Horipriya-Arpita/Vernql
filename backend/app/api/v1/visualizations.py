@@ -9,16 +9,17 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-import redis.asyncio as aioredis
-
+import structlog
 from app.db.database import get_db
 from app.core.config import settings
+from app.core.redis_client import get_redis
 from app.core.dependencies import CurrentCompany, CurrentCompanyEither
 from app.services.results_service import ResultsService
 from app.services.visualization_service import VisualizationService
 from app.core.ai_client import get_ai_client
 
 router = APIRouter(prefix="/visualizations", tags=["Visualizations"])
+logger = structlog.get_logger()
 
 
 # Pydantic schemas
@@ -62,6 +63,7 @@ class VisualizationResponse(BaseModel):
     ai_insight: Optional[str]
     visualization_data: VisualizationDataResponse
     is_public: bool
+    share_expires_at: Optional[datetime] = None
     created_at: datetime
     visualization_url: str
 
@@ -92,6 +94,13 @@ class ResultListResponse(BaseModel):
 class SharingUpdateRequest(BaseModel):
     """Request to update sharing settings"""
     is_public: bool = Field(..., description="Whether to make this visualization publicly shareable")
+    share_expires_at: Optional[datetime] = Field(
+        None,
+        description=(
+            "When the public share link should expire (ISO-8601). "
+            "Null means the share never expires. Ignored when is_public=false."
+        ),
+    )
 
 
 @router.post(
@@ -148,15 +157,13 @@ async def display_results(
 
         # If this result belongs to a session, publish to Redis so SSE clients update
         if request.session_id is not None:
-            redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
             payload = json.dumps({
                 "result_id": str(query_result.id),
                 "chart_type": query_result.chart_type,
                 "ai_insight": query_result.ai_insight,
                 "visualization_data": viz_data
             })
-            await redis_client.publish(f"session:{request.session_id}", payload)
-            await redis_client.aclose()
+            await get_redis().publish(f"session:{request.session_id}", payload)
 
         # Build response
         return VisualizationResponse(
@@ -169,6 +176,7 @@ async def display_results(
             visualization_data=viz_data,
             is_public=query_result.is_public,
             created_at=query_result.created_at,
+            share_expires_at=query_result.share_expires_at,
             visualization_url=f"/visualizations/{query_result.id}"
         )
 
@@ -178,9 +186,10 @@ async def display_results(
             detail=str(e)
         )
     except Exception as e:
+        logger.error("Failed to store results", error=str(e), query_id=str(request.query_id))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to store results: {str(e)}"
+            detail="Failed to store results. Please try again."
         )
 
 
@@ -227,6 +236,7 @@ async def get_visualization(
         ai_insight=query_result.ai_insight,
         visualization_data=viz_data,
         is_public=query_result.is_public,
+        share_expires_at=query_result.share_expires_at,
         created_at=query_result.created_at,
         visualization_url=f"/visualizations/{query_result.id}"
     )
@@ -247,6 +257,8 @@ async def get_public_visualization(
     No authentication required - only returns publicly shared visualizations.
     Use this endpoint for embedding visualizations in external websites.
     """
+    from datetime import timezone as _tz
+
     results_service = ResultsService(db)
     query_result = results_service.get_result(
         result_id=result_id,
@@ -257,6 +269,16 @@ async def get_public_visualization(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Public visualization not found"
+        )
+
+    # Enforce share expiry
+    if (
+        query_result.share_expires_at is not None
+        and query_result.share_expires_at < datetime.now(_tz.utc)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="This shared visualization has expired."
         )
 
     # Prepare visualization data
@@ -343,7 +365,8 @@ async def update_sharing(
     query_result = results_service.make_public(
         result_id=result_id,
         company_id=company.id,
-        is_public=request.is_public
+        is_public=request.is_public,
+        share_expires_at=request.share_expires_at,
     )
 
     if not query_result:

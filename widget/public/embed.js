@@ -46,7 +46,8 @@
     container: null,
     iframe: null,
     button: null,
-    styleEl: null,   // reference so destroy() can clean it up
+    styleEl: null,        // reference so destroy() can clean it up
+    messageHandler: null, // reference so destroy() can remove the listener
   };
 
   /**
@@ -166,17 +167,17 @@
     const iframe = document.createElement('iframe');
     iframe.id = 'vernql-widget-iframe';
 
-    // Build widget URL with configuration.
-    // Proxy mode: only proxyUrl is sent — apiKey/schemaId stay server-side.
-    // Direct mode: apiKey + schemaId are required.
+    // Build widget URL — ONLY non-sensitive params go in the URL so that
+    // API keys never appear in browser history, DevTools network tabs, or
+    // server access logs.
+    //
+    // Proxy mode  : proxyUrl is safe (same-origin endpoint, not a credential).
+    // Direct mode : apiKey/schemaId/apiUrl are delivered via postMessage on
+    //               iframe load (see the 'load' listener below).
     const params = new URLSearchParams({ theme: widgetState.config.theme });
 
     if (widgetState.config.proxyUrl) {
       params.append('proxyUrl', widgetState.config.proxyUrl);
-    } else {
-      params.append('apiKey',   widgetState.config.apiKey);
-      params.append('schemaId', widgetState.config.schemaId);
-      params.append('apiUrl',   widgetState.config.apiUrl);
     }
 
     if (widgetState.config.title) {
@@ -188,6 +189,21 @@
     }
 
     iframe.src = `${widgetState.config.widgetUrl}?${params.toString()}`;
+
+    // Direct mode: send credentials via postMessage once the iframe document
+    // has loaded. We target the specific widget origin so no other frame or
+    // script can intercept the message.
+    if (!widgetState.config.proxyUrl && widgetState.config.apiKey) {
+      const iframeOrigin = new URL(widgetState.config.widgetUrl).origin;
+      iframe.addEventListener('load', function() {
+        iframe.contentWindow.postMessage({
+          type:     'vernql:init',
+          apiKey:   widgetState.config.apiKey,
+          schemaId: widgetState.config.schemaId,
+          apiUrl:   widgetState.config.apiUrl,
+        }, iframeOrigin);
+      });
+    }
     iframe.style.cssText = `
       width: 100%;
       height: 100%;
@@ -263,7 +279,7 @@
   function setupProxyMessaging() {
     if (!widgetState.config.proxyUrl) return;
 
-    window.addEventListener('message', async function(event) {
+    async function proxyMessageHandler(event) {
       // Security: only handle messages from our own iframe
       if (!widgetState.iframe || event.source !== widgetState.iframe.contentWindow) return;
       if (!event.data || event.data.type !== 'vernql:query') return;
@@ -300,7 +316,10 @@
           error: err.message || 'Unknown error',
         }, iframeOrigin2);
       }
-    });
+    }
+
+    widgetState.messageHandler = proxyMessageHandler;
+    window.addEventListener('message', proxyMessageHandler);
   }
 
   /**
@@ -356,6 +375,9 @@
    * Destroy widget
    */
   function destroy() {
+    if (widgetState.messageHandler) {
+      window.removeEventListener('message', widgetState.messageHandler);
+    }
     if (widgetState.container) widgetState.container.remove();
     if (widgetState.button)    widgetState.button.remove();
     if (widgetState.styleEl)   widgetState.styleEl.remove();
@@ -367,6 +389,7 @@
       iframe: null,
       button: null,
       styleEl: null,
+      messageHandler: null,
     };
     // Allow re-initialization after destroy
     delete window.Vernql;

@@ -14,8 +14,15 @@ export default function QueriesPage() {
 
   return (
     <DashboardLayout>
-      <div className="px-4 py-8">
-        <h1 className="text-3xl font-bold text-gray-900 mb-8">Query Testing</h1>
+      <div>
+        <div className="mb-8">
+          <h1 className="text-4xl font-bold text-slate-900 dark:text-white tracking-tight mb-1.5">
+            Query Testing
+          </h1>
+          <p className="text-slate-500 dark:text-slate-400 text-lg">
+            Test natural language to SQL conversion with your schemas
+          </p>
+        </div>
         <QueryTester />
       </div>
     </DashboardLayout>
