@@ -73,9 +73,10 @@ export default function PieChartComponent({
               borderRadius: '0.5rem',
               color: 'var(--tooltip-text)'
             }}
-            formatter={(value: number) => {
-              const percent = ((value / total) * 100).toFixed(1);
-              return [value.toLocaleString(), `${percent}%`];
+            formatter={(value) => {
+              const num = typeof value === 'number' ? value : Number(value);
+              const percent = ((num / total) * 100).toFixed(1);
+              return [num.toLocaleString(), `${percent}%`];
             }}
           />
           <Legend

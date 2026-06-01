@@ -50,6 +50,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       DEBUG: ${DEBUG:-False}
       ENVIRONMENT: ${ENVIRONMENT:-development}
+      ALLOWED_ORIGINS: '["http://37.27.203.157:3000","http://localhost:3000","http://127.0.0.1:3000"]'
     volumes:
       - ./backend:/app
     depends_on:
@@ -70,10 +71,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
-    volumes:
-      - ./dashboard:/app
-      - /app/node_modules
+      NEXT_PUBLIC_API_URL: http://37.27.203.157:8000
     depends_on:
       - api
     profiles:
